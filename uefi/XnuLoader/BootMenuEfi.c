@@ -51,17 +51,18 @@ STATIC UINT32 *mPixels;     /* back buffer, one GOP mode in size, kept for the l
 struct stride_mode {
     UINT32 Stride;
     UINT32 RenderW;
+    BOOLEAN Interleaved;
     BOOLEAN UseBlt;
     CONST CHAR8 *Name;
 };
 
 STATIC CONST struct stride_mode mModes[] = {
-    { 1440, 1080, FALSE, "1440 Stride (1080 UI)" },
-    { 1440, 1440, FALSE, "1440 Stride (1440 UI)" },
-    { 1080, 1080, FALSE, "1080 Stride (1080 UI)" },
-    { 1472, 1080, FALSE, "1472 Stride (64B align)" },
-    {  360,  360, FALSE, "360 Stride (1-slice)" },
-    {    0,    0, TRUE,  "GOP Blt (Original)" },
+    { 1440, 1080, TRUE,  FALSE, "3-Slice Interleaved (1440 FB)" },
+    { 1080, 1080, TRUE,  FALSE, "3-Slice Interleaved (1080 FB)" },
+    { 1440, 1080, FALSE, FALSE, "Linear 1440 Stride" },
+    { 1080, 1080, FALSE, FALSE, "Linear 1080 Stride" },
+    {  360,  360, FALSE, FALSE, "Linear 360 Stride" },
+    {    0,    0, FALSE, TRUE,  "GOP Blt (Original)" },
 };
 #define MODE_COUNT (sizeof(mModes) / sizeof(mModes[0]))
 STATIC UINTN mModeIndex = 0;
@@ -144,10 +145,26 @@ Draw(CONST struct b2l_menu *Menu, UINT64 Now, CONST CHAR8 *Note, CONST CHAR8 *St
                 return;
         } else if (mGop->Mode->FrameBufferBase) {
             volatile UINT32 *Fb = (volatile UINT32 *)(UINTN)mGop->Mode->FrameBufferBase;
-            for (UINT32 y = 0; y < H; y++) {
-                CopyMem((VOID *)(Fb + y * Stride), mPixels + y * RenderW, RenderW * 4);
-                if (Stride > RenderW) {
-                    ZeroMem((VOID *)(Fb + y * Stride + RenderW), (Stride - RenderW) * 4);
+            if (Mode->Interleaved && RenderW % 3 == 0) {
+                UINT32 SliceW = RenderW / 3;
+                for (UINT32 y = 0; y < H; y++) {
+                    volatile UINT32 *Dst = Fb + y * Stride;
+                    CONST UINT32 *Src = mPixels + y * RenderW;
+                    for (UINT32 k = 0; k < SliceW; k++) {
+                        Dst[3 * k + 0] = Src[k];
+                        Dst[3 * k + 1] = Src[SliceW + k];
+                        Dst[3 * k + 2] = Src[2 * SliceW + k];
+                    }
+                    if (Stride > RenderW) {
+                        ZeroMem((VOID *)(Dst + RenderW), (Stride - RenderW) * 4);
+                    }
+                }
+            } else {
+                for (UINT32 y = 0; y < H; y++) {
+                    CopyMem((VOID *)(Fb + y * Stride), mPixels + y * RenderW, RenderW * 4);
+                    if (Stride > RenderW) {
+                        ZeroMem((VOID *)(Fb + y * Stride + RenderW), (Stride - RenderW) * 4);
+                    }
                 }
             }
             return;
@@ -257,6 +274,29 @@ B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown)
 VOID
 B2lBootFailed(EFI_STATUS Status)
 {
+    if (mPixels && mGop && mGop->Mode && mGop->Mode->FrameBufferBase) {
+        UINT32 RenderW = 1080;
+        UINT32 H = mGop->Mode->Info->VerticalResolution ? mGop->Mode->Info->VerticalResolution : 2280;
+        UINT32 Stride = mGop->Mode->Info->PixelsPerScanLine ? mGop->Mode->Info->PixelsPerScanLine : 1440;
+        CHAR8 Msg[128];
+        AsciiSPrint(Msg, sizeof(Msg), "Boot failed: %r", Status);
+        struct b2l_menu_view View = { 0, 0, 0, Msg, "Cannot read XNU payload. Press any key to return." };
+        b2l_menu_render(mPixels, RenderW, RenderW, H, &View);
+        volatile UINT32 *Fb = (volatile UINT32 *)(UINTN)mGop->Mode->FrameBufferBase;
+        UINT32 SliceW = RenderW / 3;
+        for (UINT32 y = 0; y < H; y++) {
+            volatile UINT32 *Dst = Fb + y * Stride;
+            CONST UINT32 *Src = mPixels + y * RenderW;
+            for (UINT32 k = 0; k < SliceW; k++) {
+                Dst[3 * k + 0] = Src[k];
+                Dst[3 * k + 1] = Src[SliceW + k];
+                Dst[3 * k + 2] = Src[2 * SliceW + k];
+            }
+            if (Stride > RenderW) {
+                ZeroMem((VOID *)(Dst + RenderW), (Stride - RenderW) * 4);
+            }
+        }
+    }
     Print(L"\r\nBoot failed: %r. The messages above say where.\r\n", Status);
     if (mGop && mGop->Mode && mGop->Mode->Info) {
         Print(L"GOP: %ux%u Scan=%u FB=0x%lx\r\n",
