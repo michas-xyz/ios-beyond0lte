@@ -67,15 +67,7 @@ python3 "$repo_root/scripts/apply-board-patches.py" "$xnu_path" \
   "$repo_root/patches/0057-b2l-scoped-coregraphics-backtrace.patch" \
   "$repo_root/patches/0058-b2l-owned-launch-cache.patch" \
   "$repo_root/patches/0059-b2l-typed-critical-exit.patch"
-# New files have separate provenance and are kept as an overlay.
-while IFS= read -r -d '' source_file; do
-  relative="${source_file#"$repo_root/xnu-overlay/"}"
-  destination="$xnu_path/$relative"
-  if [[ -f "$destination" ]] && ! cmp -s "$source_file" "$destination"; then
-    echo "Refusing to replace a different local overlay file: $destination" >&2
-    exit 1
-  fi
-done < <(find "$repo_root/xnu-overlay" -type f -print0)
+# Port files have separate provenance and are applied as an overlay.
 rsync -a "$repo_root/xnu-overlay/" "$xnu_path/"
 # The keyed PACGA (QARMA5/SipHash) is gone; historical patches 0006/0056 still list its sources in conf/files.
 perl -ni -e 'print unless m{b2l_pacga_(qarma5|siphash)}' "$xnu_path/bsd/conf/files" "$xnu_path/osfmk/conf/files"
