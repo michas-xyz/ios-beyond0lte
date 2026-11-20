@@ -25,8 +25,8 @@ xcodebuild -project "$src/libdispatch.xcodeproj" \
   SYMROOT="$base/firehose-sym" \
   DSTROOT="$B2L_DEPSROOT" \
   CODE_SIGNING_ALLOWED=NO \
-  OTHER_CFLAGS="-mkernel -Wno-packed -mcpu=generic -march=armv8-a+crypto -w -I$B2L_DEPSROOT/usr/local/include -I$B2L_DEPSROOT/usr/local/include/kernel -I$B2L_DEPSROOT/usr/include -I$xnu_path/libkern/firehose -I$xnu_path/bsd -I$xnu_path/osfmk -I$xnu_path/libkern -I$src -I$src/src/firehose -I$src/private -I$src/private/firehose" \
-  HEADER_SEARCH_PATHS="$B2L_DEPSROOT/usr/local/include $B2L_DEPSROOT/usr/include $B2L_DEPSROOT/usr/local/include/kernel $B2L_DEPSROOT/usr/local/include/firehose $B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders $B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/Headers $xnu_path/libkern/firehose $src $src/src/firehose $src/private $src/private/firehose $src/private/os $B2L_DEPSROOT/usr/local/include/os $KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders $KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/Headers $xnu_path/bsd $xnu_path/osfmk $xnu_path/libkern" \
+  OTHER_CFLAGS="-mkernel -Wno-packed -mcpu=generic -march=armv8-a+crypto -w -I$B2L_DEPSROOT/usr/local/include -I$xnu_path/libkern/firehose -I$xnu_path/bsd -I$xnu_path/osfmk -I$xnu_path/libkern -I$src -I$src/src/firehose -I$src/private -I$src/private/firehose" \
+  HEADER_SEARCH_PATHS="$B2L_DEPSROOT/usr/local/include $B2L_DEPSROOT/usr/local/include/firehose $B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders $B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/Headers $xnu_path/libkern/firehose $src $src/src/firehose $src/private $src/private/firehose $src/private/os $B2L_DEPSROOT/usr/local/include/os $KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders $KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/Headers $xnu_path/bsd $xnu_path/osfmk $xnu_path/libkern" \
   install
 status=$?
 set -e
@@ -40,8 +40,6 @@ if [[ $status -ne 0 ]] || [[ ! -f "$B2L_DEPSROOT/usr/local/lib/kernel/liblibfire
     -DKERNEL=1 -DDISPATCH_USE_DTRACE=0 \
     -DOS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1 -DOS_ATOMIC_CONFIG_STARVATION_FREE_ONLY=0 \
     -I"$B2L_DEPSROOT/usr/local/include" \
-    -I"$B2L_DEPSROOT/usr/local/include/kernel" \
-    -I"$B2L_DEPSROOT/usr/include" \
     -I"$xnu_path/libkern/firehose" \
     -I"$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders" \
     -I"$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/Headers" \

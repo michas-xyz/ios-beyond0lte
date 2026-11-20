@@ -84,13 +84,6 @@ jobs:
           mkdir -p "$B2L_DEPSROOT/usr/local/include/os"
           mkdir -p "$B2L_DEPSROOT/usr/local/include/sys"
           mkdir -p "$B2L_DEPSROOT/usr/local/include/firehose"
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel/os"
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel/sys"
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel/firehose"
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel/mach"
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel/kern"
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel/machine"
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel/vm"
           mkdir -p "$B2L_DEPSROOT/usr/local/include/mach"
           mkdir -p "$B2L_DEPSROOT/usr/local/include/kern"
           mkdir -p "$B2L_DEPSROOT/usr/local/include/machine"
@@ -110,15 +103,6 @@ jobs:
           export B2L_DEPSROOT="$RUNNER_TEMP/deps"
           git clone --filter=blob:none https://github.com/apple-oss-distributions/libdispatch.git $RUNNER_TEMP/libdispatch
           git -C $RUNNER_TEMP/libdispatch checkout 701f4d1a24ae9c6863901bbbb22624b7d1b87321
-
-          # Stage Clang builtin headers (for -nostdinc stdatomic.h, stddef.h, etc.)
-          clang_res="$(xcrun clang -print-resource-dir)/include"
-          cp -r "$clang_res"/* "$B2L_DEPSROOT/usr/local/include/" 2>/dev/null || true
-          cp -r "$clang_res"/* "$B2L_DEPSROOT/usr/local/include/kernel/" 2>/dev/null || true
-
-          # Stage Availability headers into dependency root
-          cp -r "$B2L_DEPSROOT/usr/include/"* "$B2L_DEPSROOT/usr/local/include/" 2>/dev/null || true
-          cp -r "$B2L_DEPSROOT/usr/include/"* "$B2L_DEPSROOT/usr/local/include/kernel/" 2>/dev/null || true
 
           # Stage Kernel.framework headers from KDK
           if [ -d "$KDKROOT/System/Library/Frameworks/Kernel.framework/Headers" ]; then
@@ -140,48 +124,30 @@ jobs:
           cp -r xnu/osfmk/vm/* "$B2L_DEPSROOT/usr/local/include/vm/" 2>/dev/null || true
 
           # Stage uuid headers
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/uuid" "$B2L_DEPSROOT/usr/local/include/kernel/uuid"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/uuid"
           cp -r xnu/bsd/uuid/* "$B2L_DEPSROOT/usr/local/include/uuid/" 2>/dev/null || true
-          cp -r xnu/bsd/uuid/* "$B2L_DEPSROOT/usr/local/include/kernel/uuid/" 2>/dev/null || true
 
           # Stage libkern headers
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/libkern" "$B2L_DEPSROOT/usr/local/include/kernel/libkern"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/libkern"
           cp -r xnu/libkern/libkern/* "$B2L_DEPSROOT/usr/local/include/libkern/" 2>/dev/null || true
-          cp -r xnu/libkern/libkern/* "$B2L_DEPSROOT/usr/local/include/kernel/libkern/" 2>/dev/null || true
 
           # Stage libkern firehose headers (firehose_types_private.h, chunk_private.h, tracepoint_private.h)
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/firehose" "$B2L_DEPSROOT/usr/local/include/kernel/firehose"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/firehose"
           cp -r xnu/libkern/firehose/* "$B2L_DEPSROOT/usr/local/include/" 2>/dev/null || true
           cp -r xnu/libkern/firehose/* "$B2L_DEPSROOT/usr/local/include/firehose/" 2>/dev/null || true
-          cp -r xnu/libkern/firehose/* "$B2L_DEPSROOT/usr/local/include/kernel/" 2>/dev/null || true
-          cp -r xnu/libkern/firehose/* "$B2L_DEPSROOT/usr/local/include/kernel/firehose/" 2>/dev/null || true
 
           # Stage libdispatch os headers (firehose_buffer_private.h)
           if [ -d "$RUNNER_TEMP/libdispatch/os" ]; then
             cp -r "$RUNNER_TEMP/libdispatch/os/"* "$B2L_DEPSROOT/usr/local/include/os/" 2>/dev/null || true
-            cp -r "$RUNNER_TEMP/libdispatch/os/"* "$B2L_DEPSROOT/usr/local/include/kernel/os/" 2>/dev/null || true
           fi
-
-          # Mirror internal headers into $B2L_DEPSROOT/usr/local/include/kernel/
-          cp -r xnu/libkern/os/* "$B2L_DEPSROOT/usr/local/include/kernel/os/" 2>/dev/null || true
-          cp -r xnu/bsd/sys/* "$B2L_DEPSROOT/usr/local/include/kernel/sys/" 2>/dev/null || true
-          cp -r xnu/bsd/sys/firehose* "$B2L_DEPSROOT/usr/local/include/kernel/firehose/" 2>/dev/null || true
-          cp -r xnu/osfmk/mach/* "$B2L_DEPSROOT/usr/local/include/kernel/mach/" 2>/dev/null || true
-          cp -r xnu/osfmk/kern/* "$B2L_DEPSROOT/usr/local/include/kernel/kern/" 2>/dev/null || true
-          cp -r xnu/osfmk/machine/* "$B2L_DEPSROOT/usr/local/include/kernel/machine/" 2>/dev/null || true
-          cp -r xnu/osfmk/arm/* "$B2L_DEPSROOT/usr/local/include/kernel/machine/" 2>/dev/null || true
-          cp -r xnu/osfmk/vm/* "$B2L_DEPSROOT/usr/local/include/kernel/vm/" 2>/dev/null || true
 
           # Stage libdispatch private headers
           if [ -d "$RUNNER_TEMP/libdispatch/private/firehose" ]; then
             cp -r "$RUNNER_TEMP/libdispatch/private/firehose/"* "$B2L_DEPSROOT/usr/local/include/firehose/" 2>/dev/null || true
             cp -r "$RUNNER_TEMP/libdispatch/private/firehose/"* "$B2L_DEPSROOT/usr/local/include/" 2>/dev/null || true
-            cp -r "$RUNNER_TEMP/libdispatch/private/firehose/"* "$B2L_DEPSROOT/usr/local/include/kernel/firehose/" 2>/dev/null || true
-            cp -r "$RUNNER_TEMP/libdispatch/private/firehose/"* "$B2L_DEPSROOT/usr/local/include/kernel/" 2>/dev/null || true
           fi
           if [ -d "$RUNNER_TEMP/libdispatch/private/os" ]; then
             cp -r "$RUNNER_TEMP/libdispatch/private/os/"* "$B2L_DEPSROOT/usr/local/include/os/" 2>/dev/null || true
-            cp -r "$RUNNER_TEMP/libdispatch/private/os/"* "$B2L_DEPSROOT/usr/local/include/kernel/os/" 2>/dev/null || true
           fi
 
           export LIBDISPATCH_SRC="$RUNNER_TEMP/libdispatch"
