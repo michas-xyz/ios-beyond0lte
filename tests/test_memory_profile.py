@@ -21,6 +21,18 @@ class Tests(unittest.TestCase):
         self.assertIn('"Samsung U-H EL2"',result)
         self.assertIn('"B2L absent DDR", 0xBAB00000ULL',result)
         with self.assertRaises(ValueError):prep.xnu_memory_profile('unknown profile')
+
+    def test_beyond0lte_6g_memory_profile(self):
+        original='  {"Samsung U-H EL2", 0x87000000, 0x200000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},\n  // DDR Regions\n'+OLD+'\n'
+        result=prep.xnu_memory_profile(original, 'beyond0lte')
+        self.assertEqual(result,prep.xnu_memory_profile(result, 'beyond0lte'))
+        self.assertNotIn(OLD,result)
+        # S10e 6G places el2_earlymem at 0x97D800000ULL (capping upper memory at 6G ceiling 0x980000000ULL)
+        self.assertIn('"B2L DT el2_earlymem", 0x97D800000ULL, 0x2800000ULL',result)
+        self.assertNotIn('0x9FD800000ULL',result)
+        self.assertIn('"B2L DT sec_rdx_bootdev", 0x880000000ULL, 0xAD00000ULL',result)
+        self.assertIn('"Samsung U-H EL2"',result)
+        self.assertIn('"B2L absent DDR", 0xBAB00000ULL',result)
     def test_real_external_source_if_supplied(self):
         source=os.environ.get('B2L_EXTERNAL_MEMORY_MAP')
         if not source:self.skipTest('optional external source audit')

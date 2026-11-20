@@ -6,28 +6,45 @@
 set -euo pipefail
 
 ADB="${ADB:-$HOME/Developer/android/platform-tools/adb}${B2L_SERIAL:+ -s $B2L_SERIAL}"
+adb="$ADB"
 IMAGES_DIR="$HOME/Developer/Port iOS 26 to S10/flash-kit/images"
 
 echo "=== Flash des images iOS (flash-images.sh) ==="
 echo ""
 
 # 1. Vérification préalable du téléphone
-STATE=$($adb get-state 2>/dev/null </dev/null || echo "unknown")
+STATE=$($ADB get-state 2>/dev/null </dev/null || echo "unknown")
 if [ "$STATE" != "recovery" ]; then
   echo "ERREUR : téléphone pas en TWRP. État : $STATE"
   exit 1
 fi
-MODEL=$($adb shell getprop ro.boot.em.model 2>/dev/null </dev/null | tr -d '\r')
-if [ "$MODEL" != "SM-G973F" ]; then
-  echo "ERREUR : modèle inattendu ($MODEL)"
+MODEL=$($ADB shell getprop ro.boot.em.model 2>/dev/null </dev/null | tr -d '\r')
+USERDATA_BLK="sda34"
+USERDATA_SIZE="499641200640"
+case "$MODEL" in
+  SM-G970F)
+    USERDATA_BLK="sda34"
+    USERDATA_SIZE="${B2L_USERDATA_SIZE:-115641200640}"
+    ;;
+  SM-G973F)
+    USERDATA_BLK="sda34"
+    USERDATA_SIZE="${B2L_USERDATA_SIZE:-499641200640}"
+    ;;
+  SM-G975F)
+    USERDATA_BLK="sda31"
+    USERDATA_SIZE="${B2L_USERDATA_SIZE:-499641200640}"
+    ;;
+  *)
+    echo "ERREUR : modèle inattendu ($MODEL). Attendu: SM-G970F, SM-G973F ou SM-G975F"
+    exit 1
+    ;;
+esac
+DEVICE_UID=$($ADB shell id -u 2>/dev/null </dev/null | tr -d '\r' || echo "?")
+if [ "$DEVICE_UID" != "0" ]; then
+  echo "ERREUR : pas root (uid=$DEVICE_UID)"
   exit 1
 fi
-UID=$($adb shell id -u 2>/dev/null </dev/null | tr -d '\r')
-if [ "$UID" != "0" ]; then
-  echo "ERREUR : pas root (uid=$UID)"
-  exit 1
-fi
-echo "Téléphone vérifié : TWRP root, SM-G973F"
+echo "Téléphone vérifié : TWRP root, $MODEL"
 echo ""
 
 # 2. Vérifier que les images existent
@@ -109,15 +126,15 @@ flash_one "boot" "sda14" 57671680 "$IMAGES_DIR/boot.img"
 # Ici on tente dd direct ; si le téléphone stalle, utiliser flash-chunked.sh à la place.
 flash_one "system" "sda25" 7340032000 "$IMAGES_DIR/system.img"
 
-# 7. Flash userdata (sda34, 499 641 200 640 octets) — TRÈS grosse image
+# 7. Flash userdata ($USERDATA_BLK, $USERDATA_SIZE octets) — TRÈS grosse image
 # Utiliser flash-chunked.sh depuis b1l-tools/ pour les gros volumes.
-echo "=== Flash de userdata (sda34) ==="
-echo "ATTENTION : userdata fait ~465 Gio. Utilise b1l-tools/flash-chunked.sh pour une écriture par chunks vérifiés."
+echo "=== Flash de userdata ($USERDATA_BLK) ==="
+echo "ATTENTION : userdata fait ~465 Gio (ou ~108 Gio sur S10e). Utilise b1l-tools/flash-chunked.sh pour une écriture par chunks vérifiés."
 echo "Exemple :"
-echo "  b1l-tools/flash-chunked.sh $IMAGES_DIR/userdata.img userdata /dev/block/sda34 499641200640"
+echo "  b1l-tools/flash-chunked.sh $IMAGES_DIR/userdata.img userdata /dev/block/$USERDATA_BLK $USERDATA_SIZE"
 echo ""
 echo "Si tu veux quand même tenter un dd direct (déconseillé pour une si grosse image) :"
-echo "  flash_one userdata sda34 499641200640 $IMAGES_DIR/userdata.img"
+echo "  flash_one userdata $USERDATA_BLK $USERDATA_SIZE $IMAGES_DIR/userdata.img"
 
 echo ""
 echo "=== Flash terminé ==="

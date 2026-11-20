@@ -7,7 +7,13 @@
 #define B2L_MAX_ARENA (4ULL * 1024 * 1024 * 1024)
 /* Live 8GiB board: preserve first upper bank and top40MiB EL2 early memory. */
 #define B2L_RAM_START 0x900000000ULL
+#ifndef B2L_RAM_END
+#if defined(B2L_BOARD_BEYOND0LTE) || defined(TARGET_BEYOND0LTE)
+#define B2L_RAM_END   0x97D800000ULL
+#else
 #define B2L_RAM_END   0x9FD800000ULL
+#endif
+#endif
 #define B2L_ALIGNMENT (2ULL * 1024 * 1024)
 #define B2L_EFI_HEADROOM (32ULL * 1024 * 1024)
 /* EFI descriptor wire layout is stable at its first 40 bytes; firmware may

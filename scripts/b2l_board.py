@@ -13,6 +13,8 @@ BOARDS = {
     # Galaxy S10. Same Exynos 9820 board family, DT revision 26: reserved
     # memory, HSI2C10 touch, GPA keys and panel controller match beyond2lte.
     'beyond1lte': {'model': 'SM-G973F', 'userdata': '/dev/block/sda34'},
+    # Galaxy S10e. Exynos 9820, DT revision 26, 128GB UFS storage.
+    'beyond0lte': {'model': 'SM-G970F', 'userdata': '/dev/block/sda34'},
 }
 
 
@@ -28,7 +30,7 @@ def model(name=None):
 
 
 def userdata(name=None):
-    return BOARDS[name or board()]['userdata']
+    return os.environ.get('B2L_USERDATA', BOARDS[name or board()]['userdata'])
 
 
 def platform_package(name=None):

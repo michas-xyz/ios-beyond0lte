@@ -77,10 +77,10 @@ class BootTrailerTests(unittest.TestCase):
         return prefix
 
     def verify(self, data):
-        with tempfile.NamedTemporaryFile() as image:
-            image.write(data)
-            image.flush()
-            return pack.check_boot(Path(image.name))
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "boot.img"
+            p.write_bytes(data)
+            return pack.check_boot(p)
 
     def test_seed_uses_all_256_host_bytes_once(self):
         seed = bytes(range(256))

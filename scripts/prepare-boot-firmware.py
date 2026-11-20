@@ -25,15 +25,19 @@ def replace_function(source, name, body):
     return source[:brace] + "{\n" + body + "\n}" + source[end:]
 
 
-def xnu_memory_profile(source, board):
+def xnu_memory_profile(source, board=None):
     """Remove broad budget guards; retain exact observed fixed reservations."""
+    board = board or b2l_board.board()
     marker="// B2L discontiguous RAM profile v1"
     if marker in source:return source
     expected=('"Lower dynamic guard"','"Upper bank guard"','"B2L EL2 early memory"')
     if not any(x in source for x in expected):raise ValueError("unrecognized firmware memory profile")
     lines=[l for l in source.splitlines(True) if not any(x in l for x in expected)]
     source=''.join(lines)
-    evidence=Path(__file__).resolve().parents[1]/f"common/memory/{board}-8g-dt.json"
+    mem_dir = Path(__file__).resolve().parents[1] / "common/memory"
+    evidence_6g = mem_dir / f"{board}-6g-dt.json"
+    evidence_8g = mem_dir / f"{board}-8g-dt.json"
+    evidence = evidence_6g if evidence_6g.is_file() else evidence_8g
     nodes=json.loads(evidence.read_text());entries=[]
     # Exact fixed reservations, except the existing separately named U-H row.
     for name,p in nodes.items():
@@ -46,8 +50,11 @@ def xnu_memory_profile(source, board):
     # These two low-bank gaps are absent from the live memory nodes.
     for base,size in ((0xBAB00000,0x5500000),(0xE0000000,0x1900000)):
         entries.append('  {"B2L absent DDR", 0x%XULL, 0x%XULL, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_THROUGH},\n'%(base,size))
-    at=source.index('  // DDR Regions')
-    source=source[:at]+marker+'\n'+''.join(entries)+source[at:]
+    if '  // DDR Regions' in source:
+        at = source.index('  // DDR Regions')
+        source = source[:at] + marker + '\n' + ''.join(entries) + source[at:]
+    else:
+        source = marker + '\n' + ''.join(entries) + source
     return source
 
 
@@ -140,15 +147,17 @@ def main():
     manager_inf_path = library_root / "Library/BootManagerLib/BootManagerLib.inf"
     gic_path = root / "Mu_Basecore/ArmPkg/Drivers/ArmGicDxe/GicV2/ArmGicV2Dxe.c"
     memory_path = platform / "Library/MemoryMapLib/MemoryMapLib.c"
-    ram_manager_path=root/"Silicon/Samsung/SamsungPkg/Library/RamManagerLib/RamManager.c"
-    for path in (ram_manager_path,memory_path, dsc_path, fdf_path, bindings_path, manager_path, manager_inf_path, gic_path, a.loader):
+    ram_manager_path = root / "Silicon/Samsung/SamsungPkg/Library/RamManagerLib/RamManager.c"
+    for path in (memory_path, dsc_path, fdf_path, bindings_path, manager_path, manager_inf_path, gic_path, a.loader):
         if not path.is_file():
             p.error(f"missing input: {path}")
     if re.search(rf"MemoryMapLib\s*\|\s*{package}/Library/MemoryMapLib/MemoryMapLib\.inf", dsc_path.read_text()) is None:
         p.error("external MemoryMapLib binding changed")
+    ram_manager = None
     try:
         memory = xnu_memory_profile(memory_path.read_text(), board)
-        ram_manager = xnu_ram_manager_profile(ram_manager_path.read_text())
+        if ram_manager_path.is_file():
+            ram_manager = xnu_ram_manager_profile(ram_manager_path.read_text())
     except ValueError as error:
         p.error(str(error))
     bindings = bindings_path.read_text()
@@ -281,7 +290,8 @@ def main():
     manager_inf_path.write_text(manager_inf)
     gic_path.write_text(gic)
     memory_path.write_text(memory)
-    ram_manager_path.write_text(ram_manager)
+    if ram_manager and ram_manager_path.is_file():
+        ram_manager_path.write_text(ram_manager)
     print(f"Prepared external 4 MiB firmware profile at {root}")
     print(f"Embedded loader {guid}; post-console launch precedes BootNext/BootOrder and stops if the loader returns")
 

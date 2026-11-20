@@ -436,6 +436,14 @@ B2LHIDButtons::testFired(OSObject *owner, IOTimerEventSource *sender)
 	}
 }
 
+#if defined(B2L_BOARD_BEYOND0LTE) || defined(TARGET_BEYOND0LTE)
+#define B2L_TOUCH_SURFACE_WIDTH_MM   64
+#define B2L_TOUCH_SURFACE_HEIGHT_MM  136
+#else
+#define B2L_TOUCH_SURFACE_WIDTH_MM   68
+#define B2L_TOUCH_SURFACE_HEIGHT_MM  151
+#endif
+
 bool
 B2LHIDTouch::start(IOService *provider)
 {
@@ -445,8 +453,8 @@ B2LHIDTouch::start(IOService *provider)
 	}
 	/* The digitizer covers the main display (backboardd maps it 1:1). */
 	setProperty("DisplayIntegrated", kOSBooleanTrue);
-	setProperty("SurfaceWidth", (unsigned long long)(68 << 16), 32);	/* mm, 16.16 */
-	setProperty("SurfaceHeight", (unsigned long long)(151 << 16), 32);
+	setProperty("SurfaceWidth", (unsigned long long)(B2L_TOUCH_SURFACE_WIDTH_MM << 16), 32);	/* mm, 16.16 */
+	setProperty("SurfaceHeight", (unsigned long long)(B2L_TOUCH_SURFACE_HEIGHT_MM << 16), 32);
 	gB2LTouch = this;
 	registerService();
 	IOLog("B2L HID: touch registered\n");

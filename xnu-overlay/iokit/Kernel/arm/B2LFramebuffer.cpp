@@ -55,7 +55,19 @@ enum {
 #define B2L_FB_NOTIFY_TYPES           8
 #define B2L_FB_NOTIFY_VSYNC           5
 #define B2L_FB_VSYNC_US               16667
-#define B2L_FB_DOT_PITCH              522     /* S10+ panel; geometry still comes from GOP */
+#if defined(B2L_BOARD_BEYOND0LTE) || defined(TARGET_BEYOND0LTE)
+#define B2L_FB_PANEL_WIDTH            1080
+#define B2L_FB_PANEL_HEIGHT           2280
+#define B2L_FB_DOT_PITCH              438     /* Galaxy S10e (beyond0lte) */
+#elif defined(B2L_BOARD_BEYOND1LTE)
+#define B2L_FB_PANEL_WIDTH            1440
+#define B2L_FB_PANEL_HEIGHT           3040
+#define B2L_FB_DOT_PITCH              550     /* Galaxy S10 (beyond1lte) */
+#else
+#define B2L_FB_PANEL_WIDTH            1440
+#define B2L_FB_PANEL_HEIGHT           3040
+#define B2L_FB_DOT_PITCH              522     /* Galaxy S10+ (beyond2lte) */
+#endif
 #define B2L_FB_FORMAT_BGRA            0x42475241
 
 class IOMobileFramebuffer : public IOService {
@@ -142,6 +154,13 @@ AppleCLCD::start(IOService *provider)
 	fWidth = (uint32_t)video.v_width;
 	fHeight = (uint32_t)video.v_height;
 	fRowBytes = (uint32_t)video.v_rowBytes;
+	if (fWidth == 0 || fHeight == 0) {
+		fWidth = B2L_FB_PANEL_WIDTH;
+		fHeight = B2L_FB_PANEL_HEIGHT;
+		if (fRowBytes < fWidth * 4) {
+			fRowBytes = fWidth * 4;
+		}
+	}
 	if (fPhys == 0 || fWidth == 0 || fHeight == 0 || fWidth>8192 || fHeight>8192 || fRowBytes < fWidth * 4 || (uint64_t)fRowBytes*fHeight>mapped_bytes) {
 		IOLog("B2L FB: no boot framebuffer\n");
 		return false;

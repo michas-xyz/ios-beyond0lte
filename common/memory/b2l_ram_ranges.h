@@ -8,6 +8,25 @@
  * reservation: RamManagerDxe also removes live secure-world memory holes. */
 #define B2L_RAM_MAX_RANGES 128u
 #define B2L_RAM_PAGE 16384ULL
+
+#define B2L_RAM_MAX_BYTES_6G    (6ULL * 1024 * 1024 * 1024)
+#define B2L_RAM_PHYS_CEILING_6G 0x980000000ULL
+#define B2L_RAM_UPPER_SIZE_6G   0x0f2b00000ULL
+
+#define B2L_RAM_MAX_BYTES_8G    (8ULL * 1024 * 1024 * 1024)
+#define B2L_RAM_PHYS_CEILING_8G 0xa00000000ULL
+#define B2L_RAM_UPPER_SIZE_8G   0x172b00000ULL
+
+#if defined(B2L_BOARD_BEYOND0LTE) || defined(TARGET_BEYOND0LTE)
+#define B2L_RAM_MAX_BYTES    B2L_RAM_MAX_BYTES_6G
+#define B2L_RAM_PHYS_CEILING B2L_RAM_PHYS_CEILING_6G
+#define B2L_RAM_UPPER_SIZE   B2L_RAM_UPPER_SIZE_6G
+#else
+#define B2L_RAM_MAX_BYTES    B2L_RAM_MAX_BYTES_8G
+#define B2L_RAM_PHYS_CEILING B2L_RAM_PHYS_CEILING_8G
+#define B2L_RAM_UPPER_SIZE   B2L_RAM_UPPER_SIZE_8G
+#endif
+
 struct b2l_ram_range { unsigned long long base, size; };
 static const struct b2l_ram_range b2l_ram_allowlist[] = {
     {0x80004000ULL,0x6ffc000ULL},
@@ -20,7 +39,7 @@ static const struct b2l_ram_range b2l_ram_allowlist[] = {
     {0xd1600000ULL,0xea00000ULL},
     {0xe1900000ULL,0x9a08000ULL},
     {0xed210000ULL,0x2df0000ULL},
-    {0x88ad00000ULL,0x172b00000ULL},
+    {0x88ad00000ULL,B2L_RAM_UPPER_SIZE},
 };
 static inline int b2l_ram_allowed(unsigned long long base,unsigned long long size)
 {
@@ -29,18 +48,39 @@ static inline int b2l_ram_allowed(unsigned long long base,unsigned long long siz
   if(base>=b2l_ram_allowlist[i].base&&base+size<=b2l_ram_allowlist[i].base+b2l_ram_allowlist[i].size)return 1;
  return 0;
 }
-static inline int b2l_ram_validate(const struct b2l_ram_range *r,unsigned n,
- unsigned long long primary,unsigned long long primary_size)
+static inline int b2l_ram_validate_limits(const struct b2l_ram_range *r,unsigned n,
+ unsigned long long primary,unsigned long long primary_size,
+ unsigned long long ceiling,unsigned long long max_bytes,
+ unsigned long long upper_max_end)
 {
  unsigned primary_count=0;unsigned long long total=0,last=0;
  if(!r||!n||n>B2L_RAM_MAX_RANGES)return -1;
  for(unsigned i=0;i<n;i++){
   if((r[i].base&(B2L_RAM_PAGE-1))||(r[i].size&(B2L_RAM_PAGE-1))||
-   !b2l_ram_allowed(r[i].base,r[i].size)||(i&&r[i].base<last))return -1;
+   !b2l_ram_allowed(r[i].base,r[i].size)||(i&&r[i].base<last)||
+   (r[i].base+r[i].size>ceiling))return -1;
+  if(upper_max_end&&r[i].base>=0x88ad00000ULL&&(r[i].base+r[i].size>upper_max_end))return -1;
   if(r[i].base==primary&&r[i].size==primary_size)primary_count++;
   last=r[i].base+r[i].size;total+=r[i].size;
  }
- return primary_count!=1||total>8ULL*1024*1024*1024?-1:0;
+ return primary_count!=1||total>max_bytes?-1:0;
+}
+static inline int b2l_ram_validate_board(const struct b2l_ram_range *r,unsigned n,
+ unsigned long long primary,unsigned long long primary_size,int is_6g)
+{
+ return b2l_ram_validate_limits(r,n,primary,primary_size,
+  is_6g?B2L_RAM_PHYS_CEILING_6G:B2L_RAM_PHYS_CEILING_8G,
+  is_6g?B2L_RAM_MAX_BYTES_6G:B2L_RAM_MAX_BYTES_8G,
+  is_6g?0x97D800000ULL:0x9FD800000ULL);
+}
+static inline int b2l_ram_validate(const struct b2l_ram_range *r,unsigned n,
+ unsigned long long primary,unsigned long long primary_size)
+{
+#if defined(B2L_BOARD_BEYOND0LTE) || defined(TARGET_BEYOND0LTE)
+ return b2l_ram_validate_limits(r,n,primary,primary_size,B2L_RAM_PHYS_CEILING_6G,B2L_RAM_MAX_BYTES_6G,0x97D800000ULL);
+#else
+ return b2l_ram_validate_limits(r,n,primary,primary_size,B2L_RAM_PHYS_CEILING_8G,B2L_RAM_MAX_BYTES_8G,0x9FD800000ULL);
+#endif
 }
 static inline unsigned long long b2l_ram_bytes(const struct b2l_ram_range *r,unsigned n)
 {unsigned long long t=0;for(unsigned i=0;i<n;i++)t+=r[i].size;return t;}

@@ -1,0 +1,76 @@
+name: Build iOS Boot Image (Galaxy S10e)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      board:
+        description: "Target Samsung Board"
+        required: true
+        default: "beyond0lte"
+        type: choice
+        options:
+          - beyond0lte
+          - beyond1lte
+          - beyond2lte
+
+jobs:
+  test:
+    name: Run Unit & Regression Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run S10e Test Suite
+        run: |
+          python -m unittest tests.test_b2l_board tests.test_make_board_platform tests.test_memory_profile tests.test_package_boot tests.test_ram_bounds tests.test_extract_firmware
+
+  build-macos:
+    name: Build UEFI & Boot Image
+    needs: test
+    runs-on: macos-14
+    env:
+      B2L_BOARD: ${{ github.event.inputs.board || 'beyond0lte' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Build Dependencies
+        run: |
+          brew install llvm ninja meson dos2unix
+          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+
+      - name: Fetch Apple XNU Kernel Source
+        run: |
+          bash scripts/fetch-xnu.sh xnu
+
+      - name: Prepare XNU with S10e Board Patches & Overlay
+        run: |
+          bash scripts/prepare-xnu.sh xnu
+
+      - name: Verify S10e Board & Platform Packages
+        run: |
+          python3 -c "import scripts.b2l_board as b; print('Board:', b.board(), 'Model:', b.model())"
+
+      - name: Upload Prepared Codebase & Manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: s10e-port-source
+          path: |
+            common/memory/
+            scripts/
+            tools/
