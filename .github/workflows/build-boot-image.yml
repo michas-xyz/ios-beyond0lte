@@ -154,6 +154,9 @@ jobs:
       - name: Build S10e UEFI Firmware & Boot Image
         run: |
           cd $HOME/Mu-Silicium
+          # Silence unused variable warnings on modern Clang
+          find "$HOME/Mu-Silicium" -name "B2LGoster.c" -exec sed -i 's/UINT32                 Parca;/UINT32 Parca __attribute__((unused));/' {} +
+          find "$HOME/Mu-Silicium" -name "B2LGoster.c" -exec sed -i 's/Parca++;/\/\/ Parca++;/' {} +
           export CLANGPDB_AARCH64_PREFIX=aarch64-linux-gnu-
           export PACKAGES_PATH="$HOME/Mu-Silicium:$HOME/Mu-Silicium/Silicon/Samsung:$HOME/Mu-Silicium/Silicon/Silicium:$HOME/Mu-Silicium/Mu_Basecore:$HOME/Mu-Silicium/Common/Mu:$HOME/Mu-Silicium/Common/Mu_OEM_Sample"
           python3 build_uefi.py -d beyond0lte -r RELEASE

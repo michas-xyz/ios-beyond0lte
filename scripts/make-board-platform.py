@@ -94,6 +94,10 @@ def main():
             new = new.replace('|"beyond2lte"', f'|"{board}"')
             for old, replacement in spec['smbios']:
                 new = new.replace(old, replacement)
+            new += '\n[BuildOptions]\n  *_*_AARCH64_CC_FLAGS = -Wno-error=unused-but-set-variable -Wno-error=unused-variable\n'
+        if path.name == 'B2LGoster.c':
+            new = new.replace('UINT32                 Parca;', 'UINT32                 Parca __attribute__((unused));')
+            new = new.replace('Parca++;', '// Parca++;')
         if path.name == 'DeviceBuild.py':
             new = new.replace("'beyond2lte'", f"'{board}'").replace('"beyond2lte"', f'"{board}"')
         if new != text:
