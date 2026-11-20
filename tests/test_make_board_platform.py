@@ -50,6 +50,8 @@ def setup_mock_mu_tree(root: Path):
   gSiliciumPkgTokenSpaceGuid.PcdSmbiosSystemModel|"Galaxy S10+"
   gSiliciumPkgTokenSpaceGuid.PcdSmbiosSystemSku|"Galaxy_S10+_beyond2lte"
   gSiliciumPkgTokenSpaceGuid.PcdDevicePlatform|"beyond2lte"
+  gSiliciumPkgTokenSpaceGuid.PcdFrameBufferWidth|1440
+  gSiliciumPkgTokenSpaceGuid.PcdFrameBufferHeight|3040
 """
     (pkg / "beyond2lte.dsc").write_text(dsc_content)
     (pkg / "beyond2lte.fdf").write_text("[FV.FVMAIN_COMPACT]\n# beyond2ltePkg/beyond2lte.dsc\n")
@@ -95,6 +97,8 @@ class MakeBoardPlatformTests(unittest.TestCase):
             self.assertIn("beyond0ltePkg/beyond0lte.fdf", dsc_text)
             self.assertIn('"Galaxy S10e"', dsc_text)
             self.assertIn('"Galaxy_S10e_beyond0lte"', dsc_text)
+            self.assertIn('gSiliciumPkgTokenSpaceGuid.PcdFrameBufferWidth|1080', dsc_text)
+            self.assertIn('gSiliciumPkgTokenSpaceGuid.PcdFrameBufferHeight|2280', dsc_text)
 
             # Check that no beyond2lte leftovers remain in build files
             for p in target.rglob("*"):
@@ -131,6 +135,8 @@ class MakeBoardPlatformTests(unittest.TestCase):
             self.assertIn("PLATFORM_NAME                  = beyond1lte", dsc_text)
             self.assertIn('"Galaxy S10"', dsc_text)
             self.assertIn('"Galaxy_S10_beyond1lte"', dsc_text)
+            self.assertIn('gSiliciumPkgTokenSpaceGuid.PcdFrameBufferWidth|1440', dsc_text)
+            self.assertIn('gSiliciumPkgTokenSpaceGuid.PcdFrameBufferHeight|3040', dsc_text)
 
     def test_dtb_mismatch_rejected(self):
         with tempfile.TemporaryDirectory() as td:

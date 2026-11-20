@@ -32,6 +32,8 @@ BOARD_SPECS = {
         ),
         'dtb_magic': b'BEYOND1LTE',
         'display_name': 'Galaxy S10',
+        'fb_width': 1440,
+        'fb_height': 3040,
     },
     'beyond0lte': {
         'package': 'beyond0ltePkg',
@@ -42,6 +44,8 @@ BOARD_SPECS = {
         ),
         'dtb_magic': b'BEYOND0LTE',
         'display_name': 'Galaxy S10e',
+        'fb_width': 1080,
+        'fb_height': 2280,
     },
 }
 
@@ -92,6 +96,12 @@ def main():
             new = new.replace('PLATFORM_NAME                  = beyond2lte', f'PLATFORM_NAME                  = {board}')
             new = new.replace('Build/beyond2lte', f'Build/{board}')
             new = new.replace('|"beyond2lte"', f'|"{board}"')
+            if 'fb_width' in spec:
+                new = new.replace('gSiliciumPkgTokenSpaceGuid.PcdFrameBufferWidth|1440',
+                                  f'gSiliciumPkgTokenSpaceGuid.PcdFrameBufferWidth|{spec["fb_width"]}')
+            if 'fb_height' in spec:
+                new = new.replace('gSiliciumPkgTokenSpaceGuid.PcdFrameBufferHeight|3040',
+                                  f'gSiliciumPkgTokenSpaceGuid.PcdFrameBufferHeight|{spec["fb_height"]}')
             for old, replacement in spec['smbios']:
                 new = new.replace(old, replacement)
             new += '\n[BuildOptions]\n  *_*_AARCH64_CC_FLAGS = -Wno-error=unused-but-set-variable -Wno-error=unused-variable\n'
@@ -111,6 +121,14 @@ def main():
     for _, smbios_val in spec['smbios']:
         if smbios_val not in dsc_text:
             p.error(f'{board}.dsc is missing SMBIOS string {smbios_val!r}')
+    if 'fb_width' in spec:
+        needle = f'PcdFrameBufferWidth|{spec["fb_width"]}'
+        if needle not in dsc_text:
+            p.error(f'{board}.dsc is missing {needle!r}')
+    if 'fb_height' in spec:
+        needle = f'PcdFrameBufferHeight|{spec["fb_height"]}'
+        if needle not in dsc_text:
+            p.error(f'{board}.dsc is missing {needle!r}')
 
     leftovers = [str(path.relative_to(target)) for path in target.rglob('*')
                  if path.is_file() and path.suffix in {'.dsc', '.fdf', '.inf', '.inc', '.py'}
