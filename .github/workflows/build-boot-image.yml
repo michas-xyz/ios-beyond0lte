@@ -59,7 +59,10 @@ jobs:
           curl -L -f -o Kernel_Debug_Kit_26.5_build_25F71.dmg \
             https://github.com/dortania/KdkSupportPkg/releases/download/25F71/Kernel_Debug_Kit_26.5_build_25F71.dmg
           hdiutil attach Kernel_Debug_Kit_26.5_build_25F71.dmg -mountpoint /Volumes/KDK
-          sudo installer -pkg /Volumes/KDK/*.pkg -target /
+          for pkg in "/Volumes/KDK"/*.pkg; do
+            echo "Installing: $pkg"
+            sudo installer -pkg "$pkg" -target / || true
+          done
           hdiutil detach /Volumes/KDK
           rm -f Kernel_Debug_Kit_26.5_build_25F71.dmg
           find /Library/Developer/KDKs -name "*.kdk" || true
@@ -79,8 +82,13 @@ jobs:
         run: |
           export B2L_DEPSROOT="$RUNNER_TEMP/deps"
           mkdir -p "$B2L_DEPSROOT/usr/local/include/os"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/sys"
           mkdir -p "$B2L_DEPSROOT/usr/local/include/firehose"
           mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/mach"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/kern"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/machine"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/vm"
           mkdir -p "$B2L_DEPSROOT/usr/local/lib/kernel"
           mkdir -p "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework"
 
@@ -101,21 +109,32 @@ jobs:
           if [ -d "$KDKROOT/System/Library/Frameworks/Kernel.framework/Headers" ]; then
             ln -sf "$KDKROOT/System/Library/Frameworks/Kernel.framework/Headers" "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/Headers"
             ln -sf "$KDKROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders" "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders"
+          elif [ -d "$KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/Headers" ]; then
+            ln -sf "$KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/Headers" "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/Headers"
+            ln -sf "$KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders" "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders"
           fi
 
-          # Stage XNU internal os and firehose headers
+          # Stage XNU internal headers into dependency root
           cp -r xnu/libkern/os/* "$B2L_DEPSROOT/usr/local/include/os/" 2>/dev/null || true
+          cp -r xnu/bsd/sys/* "$B2L_DEPSROOT/usr/local/include/sys/" 2>/dev/null || true
           cp -r xnu/bsd/sys/firehose* "$B2L_DEPSROOT/usr/local/include/firehose/" 2>/dev/null || true
+          cp -r xnu/osfmk/mach/* "$B2L_DEPSROOT/usr/local/include/mach/" 2>/dev/null || true
+          cp -r xnu/osfmk/kern/* "$B2L_DEPSROOT/usr/local/include/kern/" 2>/dev/null || true
+          cp -r xnu/osfmk/machine/* "$B2L_DEPSROOT/usr/local/include/machine/" 2>/dev/null || true
+          cp -r xnu/osfmk/arm/* "$B2L_DEPSROOT/usr/local/include/machine/" 2>/dev/null || true
+          cp -r xnu/osfmk/vm/* "$B2L_DEPSROOT/usr/local/include/vm/" 2>/dev/null || true
 
           # Stage libdispatch private headers
           if [ -d "$RUNNER_TEMP/libdispatch/private/firehose" ]; then
             cp -r "$RUNNER_TEMP/libdispatch/private/firehose/"* "$B2L_DEPSROOT/usr/local/include/firehose/" 2>/dev/null || true
+            cp -r "$RUNNER_TEMP/libdispatch/private/firehose/"* "$B2L_DEPSROOT/usr/local/include/" 2>/dev/null || true
           fi
           if [ -d "$RUNNER_TEMP/libdispatch/private/os" ]; then
             cp -r "$RUNNER_TEMP/libdispatch/private/os/"* "$B2L_DEPSROOT/usr/local/include/os/" 2>/dev/null || true
           fi
 
           export LIBDISPATCH_SRC="$RUNNER_TEMP/libdispatch"
+          export XNU_PATH="$GITHUB_WORKSPACE/xnu"
           bash scripts/build-firehose.sh
           test -f "$B2L_DEPSROOT/usr/local/lib/kernel/libfirehose_kernel.a"
           echo "libfirehose_kernel.a built successfully!"
