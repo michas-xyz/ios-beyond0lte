@@ -24,9 +24,9 @@ struct font { const unsigned char *bits; unsigned w, h; };
 static const struct font big = { &spleen_32_64[0][0], SPLEEN_32_64_W, SPLEEN_32_64_H };
 static const struct font small = { &spleen_16_32[0][0], SPLEEN_16_32_W, SPLEEN_16_32_H };
 
-static const char *const labels[B2L_MENU_COUNT] = { "Boot iOS", "Stay here", "Reboot to recovery", "Reboot" };
+static const char *const labels[B2L_MENU_COUNT] = { "Boot iOS", "Cycle Display Fix", "Reboot to recovery", "Reboot" };
 static const char *const details[B2L_MENU_COUNT] = {
-    "Start iOS 26 now", "Don't boot, wait in this menu", "Restart into TWRP (untested)", "Restart the phone",
+    "Start iOS 26 now", "Press Power to switch modes", "Restart into TWRP (untested)", "Restart the phone",
 };
 
 static void put(const struct canvas *c, int x, int y, uint32_t color)
@@ -151,7 +151,7 @@ void b2l_menu_render(uint32_t *pixels, uint32_t stride, uint32_t width, uint32_t
 
     if (v->note) note_lines(&c, margin, H * 70 / 100, (unsigned)cw / big.w, v->note);
 
-    static const char *const keys[3][2] = { { "Volume +/-", "move" }, { "Power", "select" }, { "Bixby", "stop the timer" } };
+    static const char *const keys[3][2] = { { "Volume +/-", "move" }, { "Power", "select / switch" }, { "Bixby", "cycle display" } };
     int kx = margin + 64;
     y = H - 120 - 3 * ((int)big.h + 24);
     for (unsigned i = 0; i < 3; i++, y += (int)big.h + 24) {

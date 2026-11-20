@@ -43,29 +43,168 @@
 
 STATIC EFI_GUID mB2lMenuGuid = { 0x78da37fb, 0x7929, 0x467d, { 0xbc, 0xd8, 0xd3, 0x44, 0x2c, 0x84, 0x3d, 0x39 } };
 STATIC CONST CHAR16 *mItems[B2L_MENU_COUNT] = {
-    L"Boot iOS", L"Stay here (don't boot)", L"Reboot to recovery (untested)", L"Reboot",
+    L"Boot iOS", L"Cycle Display Fix", L"Reboot to recovery (untested)", L"Reboot",
 };
 STATIC EFI_GRAPHICS_OUTPUT_PROTOCOL *mGop;
 STATIC UINT32 *mPixels;     /* back buffer, one GOP mode in size, kept for the loader's lifetime */
 
+#define B2L_DPP_BASE          0x19020000ULL
+#define B2L_DECON_BASE        0x19030000ULL
+#define B2L_DMA_BASE          0x19070000ULL
+
+#define B2L_DECON_UPDATE_REQ  0x0060
+#define B2L_DECON_UPDATE_BITS ((1u << 31) | 0x3fu)
+#define B2L_DECON_UPDATE      0x1410
+
 struct stride_mode {
     UINT32 Stride;
     UINT32 RenderW;
-    BOOLEAN Interleaved;
     BOOLEAN UseBlt;
     CONST CHAR8 *Name;
 };
 
 STATIC CONST struct stride_mode mModes[] = {
-    { 1440, 1080, TRUE,  FALSE, "3-Slice Interleaved (1440 FB)" },
-    { 1080, 1080, TRUE,  FALSE, "3-Slice Interleaved (1080 FB)" },
-    { 1440, 1080, FALSE, FALSE, "Linear 1440 Stride" },
-    { 1080, 1080, FALSE, FALSE, "Linear 1080 Stride" },
-    {  360,  360, FALSE, FALSE, "Linear 360 Stride" },
-    {    0,    0, FALSE, TRUE,  "GOP Blt (Original)" },
+    { 1080, 1080, FALSE, "Mode 0: DECON 3-Slice Split (HW 3x360 -> 1080)" },
+    { 1080, 1080, FALSE, "Mode 1: DECON Single Window 1080 (HW Fullscreen)" },
+    {  360,  360, FALSE, "Mode 2: DECON Window 0 (HW 360 Slice Only)" },
+    { 1080, 1080, FALSE, "Mode 3: Linear 1080 FB Copy (No HW Change)" },
+    { 1440, 1080, FALSE, "Mode 4: Linear 1440 FB Copy (No HW Change)" },
+    {    0,    0, TRUE,  "Mode 5: GOP Blt (Original Firmware Blit)" },
 };
 #define MODE_COUNT (sizeof(mModes) / sizeof(mModes[0]))
 STATIC UINTN mModeIndex = 0;
+
+STATIC UINT32 mFbHits[16];
+STATIC UINTN  mFbHitCount = 0;
+STATIC CHAR8  mDiagBuf[128] = "Scanning registers...";
+
+STATIC VOID
+ScanFbRegisters(VOID)
+{
+    mFbHitCount = 0;
+    UINT64 bases[] = { B2L_DPP_BASE, B2L_DECON_BASE, B2L_DMA_BASE };
+    for (UINTN b = 0; b < 3; b++) {
+        for (UINT32 off = 0; off < 0x8000; off += 4) {
+            UINT32 val = MmioRead32(bases[b] + off);
+            if (val == 0xCA000000 && mFbHitCount < 16) {
+                mFbHits[mFbHitCount++] = (UINT32)(bases[b] + off);
+            }
+        }
+    }
+    if (mFbHitCount > 0) {
+        AsciiSPrint(mDiagBuf, sizeof(mDiagBuf), "FB hits (%u): %08x %08x %08x",
+                    (UINT32)mFbHitCount,
+                    mFbHits[0],
+                    mFbHitCount > 1 ? mFbHits[1] : 0,
+                    mFbHitCount > 2 ? mFbHits[2] : 0);
+    } else {
+        AsciiSPrint(mDiagBuf, sizeof(mDiagBuf), "No FB base registers found in scan");
+    }
+}
+
+STATIC VOID
+TriggerDeconUpdate(VOID)
+{
+    MmioWrite32(B2L_DECON_BASE + B2L_DECON_UPDATE_REQ,
+                MmioRead32(B2L_DECON_BASE + B2L_DECON_UPDATE_REQ) | B2L_DECON_UPDATE_BITS);
+    MmioWrite32(B2L_DECON_BASE + B2L_DECON_UPDATE, 1);
+}
+
+STATIC VOID
+ApplyDisplayMode(UINTN ModeIndex)
+{
+    if (mFbHitCount == 0) {
+        ScanFbRegisters();
+    }
+
+    if (ModeIndex == 0) {
+        /* Mode 0: DECON 3-Slice Split.
+         * Slice 0 -> 0xCA000000 (X = 0..359)
+         * Slice 1 -> 0xCA000000 + 1440 (X = 360..719)
+         * Slice 2 -> 0xCA000000 + 2880 (X = 720..1079)
+         * Stride = 1080 pixels (4320 bytes).
+         */
+        if (mFbHitCount >= 3) {
+            MmioWrite32(mFbHits[0], 0xCA000000);
+            MmioWrite32(mFbHits[1], 0xCA000000 + 1440);
+            MmioWrite32(mFbHits[2], 0xCA000000 + 2880);
+            for (UINTN i = 0; i < 3; i++) {
+                if ((mFbHits[i] & 0x0FFF) == 0x040) {
+                    MmioWrite32(mFbHits[i] + 0x800, 0xCA000000 + i * 1440);
+                    MmioWrite32(mFbHits[i] - 0x30, (2280 << 16) | 1080);
+                    MmioWrite32(mFbHits[i] + 0x800 - 0x30, (2280 << 16) | 1080);
+                }
+            }
+        }
+
+        // IDMA channels at 0x19070000
+        MmioWrite32(B2L_DMA_BASE + 0x1010, (2280 << 16) | 1080);
+        MmioWrite32(B2L_DMA_BASE + 0x1040, 0xCA000000);
+        MmioWrite32(B2L_DMA_BASE + 0x1810, (2280 << 16) | 1080);
+        MmioWrite32(B2L_DMA_BASE + 0x1840, 0xCA000000);
+
+        MmioWrite32(B2L_DMA_BASE + 0x2010, (2280 << 16) | 1080);
+        MmioWrite32(B2L_DMA_BASE + 0x2040, 0xCA000000 + 1440);
+        MmioWrite32(B2L_DMA_BASE + 0x2810, (2280 << 16) | 1080);
+        MmioWrite32(B2L_DMA_BASE + 0x2840, 0xCA000000 + 1440);
+
+        MmioWrite32(B2L_DMA_BASE + 0x3010, (2280 << 16) | 1080);
+        MmioWrite32(B2L_DMA_BASE + 0x3040, 0xCA000000 + 2880);
+        MmioWrite32(B2L_DMA_BASE + 0x3810, (2280 << 16) | 1080);
+        MmioWrite32(B2L_DMA_BASE + 0x3840, 0xCA000000 + 2880);
+
+        // Traditional DECON registers
+        MmioWrite32(B2L_DECON_BASE + 0x0150, 0xCA000000);
+        MmioWrite32(B2L_DECON_BASE + 0x0160, 0xCA000000 + 1440);
+        MmioWrite32(B2L_DECON_BASE + 0x0170, 0xCA000000 + 2880);
+        MmioWrite32(B2L_DECON_BASE + 0x0200, 4320);
+        MmioWrite32(B2L_DECON_BASE + 0x0204, 4320);
+        MmioWrite32(B2L_DECON_BASE + 0x0208, 4320);
+
+        TriggerDeconUpdate();
+    } else if (ModeIndex == 1) {
+        /* Mode 1: DECON Single Window 1080 Fullscreen.
+         * Disable Slice 1 and 2, expand Slice 0 to 1080x2280.
+         */
+        MmioWrite32(B2L_DMA_BASE + 0x2000, 0);
+        MmioWrite32(B2L_DMA_BASE + 0x3000, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x1030, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x1060, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x0024, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x0028, 0);
+
+        MmioWrite32(B2L_DMA_BASE + 0x1010, (2280 << 16) | 1080);
+        MmioWrite32(B2L_DMA_BASE + 0x1018, (2280 << 16) | 1080);
+        MmioWrite32(B2L_DMA_BASE + 0x1040, 0xCA000000);
+        MmioWrite32(B2L_DMA_BASE + 0x1810, (2280 << 16) | 1080);
+        MmioWrite32(B2L_DMA_BASE + 0x1840, 0xCA000000);
+
+        MmioWrite32(B2L_DECON_BASE + 0x1008, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x100C, (2279 << 16) | 1079);
+        MmioWrite32(B2L_DECON_BASE + 0x00B0, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x00B4, (1079 << 11) | 2279);
+        MmioWrite32(B2L_DECON_BASE + 0x0150, 0xCA000000);
+        MmioWrite32(B2L_DECON_BASE + 0x0200, 4320);
+
+        TriggerDeconUpdate();
+    } else if (ModeIndex == 2) {
+        /* Mode 2: Only Slice 0 active (360 width).
+         */
+        MmioWrite32(B2L_DMA_BASE + 0x2000, 0);
+        MmioWrite32(B2L_DMA_BASE + 0x3000, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x1030, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x1060, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x0024, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x0028, 0);
+
+        MmioWrite32(B2L_DMA_BASE + 0x1010, (2280 << 16) | 360);
+        MmioWrite32(B2L_DMA_BASE + 0x1040, 0xCA000000);
+        MmioWrite32(B2L_DECON_BASE + 0x0150, 0xCA000000);
+        MmioWrite32(B2L_DECON_BASE + 0x0200, 1440);
+
+        TriggerDeconUpdate();
+    }
+}
 
 STATIC UINT64
 NowMs(VOID)
@@ -130,14 +269,21 @@ Draw(CONST struct b2l_menu *Menu, UINT64 Now, CONST CHAR8 *Note, CONST CHAR8 *St
         UINT32 Stride = Mode->Stride ? Mode->Stride : mGop->Mode->Info->PixelsPerScanLine;
         if (Stride == 0) Stride = 1440;
 
+        CHAR8 StatusText[128];
+        if (Status) {
+            AsciiStrCpyS(StatusText, sizeof(StatusText), Status);
+        } else {
+            AsciiSPrint(StatusText, sizeof(StatusText), "%a", Mode->Name);
+        }
+
         CHAR8 ModeNote[128];
         if (Note) {
             AsciiStrCpyS(ModeNote, sizeof(ModeNote), Note);
         } else {
-            AsciiSPrint(ModeNote, sizeof(ModeNote), "Mode %u: %a (Bixby to cycle)", (UINT32)mModeIndex, Mode->Name);
+            AsciiStrCpyS(ModeNote, sizeof(ModeNote), mDiagBuf);
         }
 
-        struct b2l_menu_view View = { Menu->selected, Left, B2L_MENU_TIMEOUT_S, Status, ModeNote };
+        struct b2l_menu_view View = { Menu->selected, Left, B2L_MENU_TIMEOUT_S, StatusText, ModeNote };
         b2l_menu_render(mPixels, RenderW, RenderW, H, &View);
 
         if (Mode->UseBlt) {
@@ -145,26 +291,10 @@ Draw(CONST struct b2l_menu *Menu, UINT64 Now, CONST CHAR8 *Note, CONST CHAR8 *St
                 return;
         } else if (mGop->Mode->FrameBufferBase) {
             volatile UINT32 *Fb = (volatile UINT32 *)(UINTN)mGop->Mode->FrameBufferBase;
-            if (Mode->Interleaved && RenderW % 3 == 0) {
-                UINT32 SliceW = RenderW / 3;
-                for (UINT32 y = 0; y < H; y++) {
-                    volatile UINT32 *Dst = Fb + y * Stride;
-                    CONST UINT32 *Src = mPixels + y * RenderW;
-                    for (UINT32 k = 0; k < SliceW; k++) {
-                        Dst[3 * k + 0] = Src[k];
-                        Dst[3 * k + 1] = Src[SliceW + k];
-                        Dst[3 * k + 2] = Src[2 * SliceW + k];
-                    }
-                    if (Stride > RenderW) {
-                        ZeroMem((VOID *)(Dst + RenderW), (Stride - RenderW) * 4);
-                    }
-                }
-            } else {
-                for (UINT32 y = 0; y < H; y++) {
-                    CopyMem((VOID *)(Fb + y * Stride), mPixels + y * RenderW, RenderW * 4);
-                    if (Stride > RenderW) {
-                        ZeroMem((VOID *)(Fb + y * Stride + RenderW), (Stride - RenderW) * 4);
-                    }
+            for (UINT32 y = 0; y < H; y++) {
+                CopyMem((VOID *)(Fb + y * Stride), mPixels + y * RenderW, RenderW * 4);
+                if (Stride > RenderW) {
+                    ZeroMem((VOID *)(Fb + y * Stride + RenderW), (Stride - RenderW) * 4);
                 }
             }
             return;
@@ -240,6 +370,8 @@ B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown)
 
     enum b2l_menu_start Start = NoCountdown ? B2L_START_FORCE_MENU : ProbeStart(Timer);
     b2l_menu_init(&Menu, Remembered(), B2L_MENU_TIMEOUT_S * 1000u, Start, NowMs());
+    ScanFbRegisters();
+    ApplyDisplayMode(mModeIndex);
     Draw(&Menu, NowMs(), Note, NULL);
     for (;;) {
         enum b2l_menu_key Key = WaitKey(Timer, 100);
@@ -247,6 +379,7 @@ B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown)
         if (Key == B2L_KEY_BACK) {
             Menu.counting = 0;
             mModeIndex = (mModeIndex + 1) % MODE_COUNT;
+            ApplyDisplayMode(mModeIndex);
             Draw(&Menu, Now, Note, NULL);
             continue;
         }
@@ -256,10 +389,9 @@ B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown)
         Remember((UINT8)Menu.selected);
         if (Action == B2L_ACT_BOOT) { Choice = B2L_CHOICE_BOOT; break; }
         if (Action == B2L_ACT_HOLD) {
-            Draw(&Menu, Now, Note, "Not booting. Press any key for the menu.");
-            while (WaitKey(Timer, 1000) == B2L_KEY_NONE) {}
-            b2l_menu_init(&Menu, Menu.selected, 0, B2L_START_FORCE_MENU, NowMs());
-            Draw(&Menu, NowMs(), Note, NULL);
+            mModeIndex = (mModeIndex + 1) % MODE_COUNT;
+            ApplyDisplayMode(mModeIndex);
+            Draw(&Menu, Now, Note, NULL);
             continue;
         }
         Draw(&Menu, Now, Note, Action == B2L_ACT_RECOVERY ? "Rebooting to recovery..." : "Rebooting...");
@@ -277,24 +409,14 @@ B2lBootFailed(EFI_STATUS Status)
     if (mPixels && mGop && mGop->Mode && mGop->Mode->FrameBufferBase) {
         UINT32 RenderW = 1080;
         UINT32 H = mGop->Mode->Info->VerticalResolution ? mGop->Mode->Info->VerticalResolution : 2280;
-        UINT32 Stride = mGop->Mode->Info->PixelsPerScanLine ? mGop->Mode->Info->PixelsPerScanLine : 1440;
+        UINT32 Stride = 1080;
         CHAR8 Msg[128];
         AsciiSPrint(Msg, sizeof(Msg), "Boot failed: %r", Status);
         struct b2l_menu_view View = { 0, 0, 0, Msg, "Cannot read XNU payload. Press any key to return." };
         b2l_menu_render(mPixels, RenderW, RenderW, H, &View);
         volatile UINT32 *Fb = (volatile UINT32 *)(UINTN)mGop->Mode->FrameBufferBase;
-        UINT32 SliceW = RenderW / 3;
         for (UINT32 y = 0; y < H; y++) {
-            volatile UINT32 *Dst = Fb + y * Stride;
-            CONST UINT32 *Src = mPixels + y * RenderW;
-            for (UINT32 k = 0; k < SliceW; k++) {
-                Dst[3 * k + 0] = Src[k];
-                Dst[3 * k + 1] = Src[SliceW + k];
-                Dst[3 * k + 2] = Src[2 * SliceW + k];
-            }
-            if (Stride > RenderW) {
-                ZeroMem((VOID *)(Dst + RenderW), (Stride - RenderW) * 4);
-            }
+            CopyMem((VOID *)(Fb + y * Stride), mPixels + y * RenderW, RenderW * 4);
         }
     }
     Print(L"\r\nBoot failed: %r. The messages above say where.\r\n", Status);

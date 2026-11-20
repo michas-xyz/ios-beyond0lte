@@ -97,7 +97,7 @@ class MakeBoardPlatformTests(unittest.TestCase):
             self.assertIn("beyond0ltePkg/beyond0lte.fdf", dsc_text)
             self.assertIn('"Galaxy S10e"', dsc_text)
             self.assertIn('"Galaxy_S10e_beyond0lte"', dsc_text)
-            self.assertIn('gSiliciumPkgTokenSpaceGuid.PcdFrameBufferWidth|1440', dsc_text)
+            self.assertIn('gSiliciumPkgTokenSpaceGuid.PcdFrameBufferWidth|1080', dsc_text)
             self.assertIn('gSiliciumPkgTokenSpaceGuid.PcdFrameBufferHeight|2280', dsc_text)
 
             # Check that no beyond2lte leftovers remain in build files

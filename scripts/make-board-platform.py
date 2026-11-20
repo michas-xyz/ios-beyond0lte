@@ -44,12 +44,9 @@ BOARD_SPECS = {
         ),
         'dtb_magic': b'BEYOND0LTE',
         'display_name': 'Galaxy S10e',
-        # Note: Exynos 9820 S-Boot initializes DECON IDMA hardware with a line pitch of
-        # 1440 pixels (5760 bytes) across the entire S10 family. Setting fb_width to 1080
-        # causes SimpleFbDxe and FrameBufferSerialPortLib to write with pitch 4320, resulting
-        # in a 360-pixel line shift every row (1080 / 360 = 3), tripling the image horizontally.
-        # Keeping fb_width at 1440 aligns scanlines with DECON hardware scanout.
-        'fb_width': 1440,
+        # S10e native panel geometry: 1080x2280 AMOLED (s6e3fa7).
+        # Pitch is 1080 pixels (4320 bytes), matching 3x 360-pixel hardware window slices.
+        'fb_width': 1080,
         'fb_height': 2280,
     },
 }
@@ -113,6 +110,14 @@ def main():
         if path.name == 'B2LGoster.c':
             new = new.replace('UINT32                 Parca;', 'UINT32                 Parca __attribute__((unused));')
             new = new.replace('Parca++;', '// Parca++;')
+        if path.name == 'MemoryMapLib.c':
+            if '{"DMA",' not in text and '{"Decon",' in text:
+                new = new.replace(
+                    '{"Decon",              0x19030000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},',
+                    '{"DPP",                0x19020000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},\n'
+                    '  {"Decon",              0x19030000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},\n'
+                    '  {"DMA",                0x19070000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},'
+                )
         if path.name == 'DeviceBuild.py':
             new = new.replace("'beyond2lte'", f"'{board}'").replace('"beyond2lte"', f'"{board}"')
         if new != text:
