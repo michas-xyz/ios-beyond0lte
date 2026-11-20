@@ -132,8 +132,8 @@ def main():
                 '  }'
             )
             new_gpio_loop = (
-                '  UINT32 Gpa0 = MmioRead32 (0x15850004);\n'
-                '  UINT32 Gpa2 = MmioRead32 (0x15850044);\n'
+                '  UINT32 Gpa0 = *(volatile UINT32 *)(UINTN)0x15850004;\n'
+                '  UINT32 Gpa2 = *(volatile UINT32 *)(UINTN)0x15850044;\n'
                 '  BOOLEAN VolUp = !(Gpa0 & (1u << 3));\n'
                 '  BOOLEAN VolDown = !(Gpa0 & (1u << 4));\n'
                 '  BOOLEAN Bixby = !(Gpa0 & (1u << 6));\n'
