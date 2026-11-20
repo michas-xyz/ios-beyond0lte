@@ -134,16 +134,7 @@ jobs:
           done
 
           # Bypass OverrideValidation plugin so non-critical override comment tags do not crash the build
-          python3 -c "
-import os
-p = os.path.expanduser('~/Mu-Silicium/Mu_Basecore/BaseTools/Plugin/OverrideValidation/OverrideValidation.py')
-if os.path.isfile(p):
-    with open(p, 'r') as f:
-        content = f.read()
-    content = content.replace('def do_pre_build(self, thebuilder):', 'def do_pre_build(self, thebuilder):\n        return 0')
-    with open(p, 'w') as f:
-        f.write(content)
-"
+          python3 -c "import os; p=os.path.expanduser('~/Mu-Silicium/Mu_Basecore/BaseTools/Plugin/OverrideValidation/OverrideValidation.py'); open(p, 'w').write(open(p).read().replace('def do_pre_build(self, thebuilder):', 'def do_pre_build(self, thebuilder):\n        return 0')) if os.path.exists(p) else None"
 
       - name: Generate S10e (beyond0lte) Platform Package
         run: |
