@@ -17,6 +17,7 @@ import sys
 import tarfile
 import uuid
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import b2l_board
 
 FD_BASE = 0xC9000000

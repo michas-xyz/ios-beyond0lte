@@ -1,2 +1,5 @@
-# Unified diff context lines preserve upstream indentation and blank lines.
+* text=auto eol=lf
 patches/*.patch -whitespace
+*.sh text eol=lf
+*.py text eol=lf
+

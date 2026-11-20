@@ -35,7 +35,7 @@ jobs:
           python -m unittest tests.test_b2l_board tests.test_make_board_platform tests.test_memory_profile tests.test_package_boot tests.test_ram_bounds tests.test_extract_firmware
 
   build-xnu:
-    name: Prepare XNU Kernel Sources
+    name: Build S10e XNU Mach-O Kernel
     needs: test
     runs-on: macos-latest
     env:
@@ -54,6 +54,48 @@ jobs:
           brew install llvm ninja meson dos2unix
           echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
 
+      - name: Download & Install Apple Kernel Debug Kit (26.5 build 25F71)
+        run: |
+          curl -L -f -o Kernel_Debug_Kit_26.5_build_25F71.dmg \
+            https://github.com/dortania/KdkSupportPkg/releases/download/25F71/Kernel_Debug_Kit_26.5_build_25F71.dmg
+          hdiutil attach Kernel_Debug_Kit_26.5_build_25F71.dmg -mountpoint /Volumes/KDK
+          sudo installer -pkg /Volumes/KDK/*.pkg -target /
+          hdiutil detach /Volumes/KDK
+          rm -f Kernel_Debug_Kit_26.5_build_25F71.dmg
+          find /Library/Developer/KDKs -name "*.kdk" || true
+          echo "KDK installed successfully!"
+
+      - name: Setup AvailabilityVersions & Dependency Root
+        run: |
+          export B2L_DEPSROOT="$RUNNER_TEMP/deps"
+          mkdir -p "$B2L_DEPSROOT"
+          git clone --filter=blob:none https://github.com/apple-oss-distributions/AvailabilityVersions.git $RUNNER_TEMP/AvailabilityVersions
+          git -C $RUNNER_TEMP/AvailabilityVersions checkout 149b1777f3e8c2133042d8e188f72e3adf6a7110
+          bash tools/b1l/install-availability.sh $RUNNER_TEMP/AvailabilityVersions "$B2L_DEPSROOT"
+          test -x "$B2L_DEPSROOT/usr/local/libexec/availability.pl"
+          echo "AvailabilityVersions installed successfully!"
+
+      - name: Build S10e ARM64 Generic libfirehose_kernel
+        run: |
+          export KDKROOT=$(find /Library/Developer/KDKs -name "*.kdk" | head -n 1)
+          export B2L_DEPSROOT="$RUNNER_TEMP/deps"
+          git clone --filter=blob:none https://github.com/apple-oss-distributions/libdispatch.git $RUNNER_TEMP/libdispatch
+          git -C $RUNNER_TEMP/libdispatch checkout 701f4d1a24ae9c6863901bbbb22624b7d1b87321
+
+          mkdir -p "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework"
+          if [ -d "$KDKROOT/System/Library/Frameworks/Kernel.framework/Headers" ]; then
+            ln -sf "$KDKROOT/System/Library/Frameworks/Kernel.framework/Headers" "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/Headers"
+            ln -sf "$KDKROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders" "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders"
+          fi
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/os"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/firehose"
+
+          export LIBDISPATCH_SRC="$RUNNER_TEMP/libdispatch"
+          bash scripts/build-firehose.sh
+          test -f "$B2L_DEPSROOT/usr/local/lib/kernel/libfirehose_kernel.a"
+          echo "libfirehose_kernel.a built successfully!"
+
       - name: Fetch Apple XNU Kernel Source
         run: |
           bash scripts/fetch-xnu.sh xnu
@@ -61,19 +103,36 @@ jobs:
       - name: Prepare XNU with S10e Board Patches & Overlay
         run: |
           bash scripts/prepare-xnu.sh xnu
+          echo "#define B2L_BUILD_EPOCH $(date +%s)" > xnu/iokit/Kernel/arm/b2l_build_epoch.h
+          touch xnu/iokit/Kernel/arm/B2LPlatformExpert.cpp
 
-      - name: Verify S10e Board & Platform Packages
+      - name: Build S10e XNU Kernel (mach.development.b2l)
         run: |
-          python3 -c "import scripts.b2l_board as b; print('Board:', b.board(), 'Model:', b.model())"
+          export KDKROOT=$(find /Library/Developer/KDKs -name "*.kdk" | head -n 1)
+          export B2L_DEPSROOT="$RUNNER_TEMP/deps"
+          export BUILD_DIR="$GITHUB_WORKSPACE/out/xnu"
+          export BUILD_JOBS=$(sysctl -n hw.ncpu)
+          bash scripts/build-kernel.sh CWARNFLAGS=-w CXXWARNFLAGS=-w
 
-      - name: Upload Prepared Codebase & Manifest
+      - name: Verify & Stage Kernel Artifact
+        run: |
+          mkdir -p out/kernel
+          K=$(find out/xnu -name "mach.development.b2l" -type f | head -n 1)
+          if [ -z "$K" ]; then
+            echo "Error: mach.development.b2l was not found in out/xnu!"
+            find out/xnu -maxdepth 4 || true
+            exit 1
+          fi
+          cp "$K" out/kernel/mach.development.b2l
+          file out/kernel/mach.development.b2l
+          otool -hv out/kernel/mach.development.b2l
+          ls -lh out/kernel/
+
+      - name: Upload S10e XNU Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: s10e-port-source
-          path: |
-            common/memory/
-            scripts/
-            tools/
+          name: s10e-xnu-kernel
+          path: out/kernel/mach.development.b2l
 
   build-uefi:
     name: Build S10e UEFI Firmware & Boot Image
@@ -201,3 +260,66 @@ jobs:
         with:
           name: s10e-uefi-boot-image
           path: out/boot/
+
+  package-boot-image:
+    name: Package Complete S10e iOS Boot Image
+    needs: [build-xnu, build-uefi]
+    runs-on: ubuntu-latest
+    env:
+      B2L_BOARD: ${{ github.event.inputs.board || 'beyond0lte' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Packaging Dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm gcc-aarch64-linux-gnu device-tree-compiler
+
+      - name: Clone Mu-Silicium Packaging Tools
+        run: |
+          git clone --depth 1 https://github.com/Project-Silicium/Mu-Silicium.git $HOME/Mu-Silicium
+          mkdir -p $HOME/Mu-Silicium/Resources/DTBs
+          cp common/dtb/beyond0lte.dtb $HOME/Mu-Silicium/Resources/DTBs/beyond0lte.dtb
+
+      - name: Download XNU Kernel Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: s10e-xnu-kernel
+          path: out/kernel
+
+      - name: Download S10e UEFI Firmware Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: s10e-uefi-boot-image
+          path: out/uefi
+
+      - name: Package Complete Boot Image (UEFI + XNU Trailer)
+        run: |
+          mkdir -p out/package
+          python3 scripts/package-boot.py \
+            --mu $HOME/Mu-Silicium \
+            --firmware out/uefi/SILICIUM_UEFI.fd \
+            --kernel out/kernel/mach.development.b2l \
+            --loader out/uefi/XnuLoader.efi \
+            --output-dir out/package \
+            --max-image-bytes 57671680 \
+            --boot-partition-bytes 57671680
+
+          ls -lh out/package/
+
+      - name: Verify Packaged Boot Image
+        run: |
+          python3 scripts/package-boot.py --verify out/package/boot.img
+
+      - name: Upload Packaged S10e iOS Boot Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: s10e-ios-boot-image
+          path: out/package/
