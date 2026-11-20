@@ -92,8 +92,9 @@ jobs:
 
       - name: Install Build Dependencies
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
-          sudo apt-get install -y git build-essential gcc g++ clang lld llvm uuid-dev bison flex libssl-dev acpica-tools device-tree-compiler dos2unix python3-pip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu mono-devel nasm
+          sudo apt-get install -y --no-install-recommends git build-essential gcc g++ clang lld llvm uuid-dev bison flex libssl-dev acpica-tools device-tree-compiler dos2unix python3-pip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu nasm rsync
 
       - name: Clone Mu-Silicium & S10 Reference Overlay
         run: |
