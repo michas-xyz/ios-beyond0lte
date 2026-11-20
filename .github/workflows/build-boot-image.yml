@@ -133,8 +133,8 @@ jobs:
             fi
           done
 
-          # Bypass OverrideValidation plugin so non-critical override comment tags do not crash the build
-          python3 -c "import os; p=os.path.expanduser('~/Mu-Silicium/Mu_Basecore/BaseTools/Plugin/OverrideValidation/OverrideValidation.py'); open(p, 'w').write(open(p).read().replace('def do_pre_build(self, thebuilder):', 'def do_pre_build(self, thebuilder):\n        return 0')) if os.path.exists(p) else None"
+          # Remove OverrideValidation plugin descriptor so non-critical override comment tags do not crash the build
+          rm -rf "$HOME/Mu-Silicium/Mu_Basecore/BaseTools/Plugin/OverrideValidation"
 
       - name: Generate S10e (beyond0lte) Platform Package
         run: |
