@@ -136,6 +136,9 @@ jobs:
           # Remove OverrideValidation plugin descriptor so non-critical override comment tags do not crash the build
           rm -rf "$HOME/Mu-Silicium/Mu_Basecore/BaseTools/Plugin/OverrideValidation"
 
+          # Prune missing library references in S5E9820Pkg.dsc.inc
+          python3 -c "from pathlib import Path; import os; [dsc.write_text('\n'.join([f'  # {l.strip()}' if ('|' in l and '.inf' in l and not l.strip().startswith('#') and not (dsc.parent / l.split('|')[1].strip().replace('S5E9820Pkg/', '')).is_file()) else l for l in dsc.read_text().splitlines()]) + '\n') for dsc in Path(os.path.expanduser('~/Mu-Silicium')).glob('**/S5E9820Pkg.dsc.inc')]"
+
       - name: Generate S10e (beyond0lte) Platform Package
         run: |
           python3 scripts/make-board-platform.py \
