@@ -37,7 +37,7 @@ jobs:
   build-macos:
     name: Build UEFI & Boot Image
     needs: test
-    runs-on: macos-14
+    runs-on: macos-latest
     env:
       B2L_BOARD: ${{ github.event.inputs.board || 'beyond0lte' }}
     steps:
