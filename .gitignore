@@ -11,6 +11,7 @@ out/
 *.kernelcache
 *.kc
 *.dtb
+!common/dtb/*.dtb
 *.fd
 .DS_Store
 

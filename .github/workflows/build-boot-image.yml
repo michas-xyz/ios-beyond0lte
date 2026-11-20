@@ -34,8 +34,8 @@ jobs:
         run: |
           python -m unittest tests.test_b2l_board tests.test_make_board_platform tests.test_memory_profile tests.test_package_boot tests.test_ram_bounds tests.test_extract_firmware
 
-  build-macos:
-    name: Build UEFI & Boot Image
+  build-xnu:
+    name: Prepare XNU Kernel Sources
     needs: test
     runs-on: macos-latest
     env:
@@ -74,3 +74,59 @@ jobs:
             common/memory/
             scripts/
             tools/
+
+  build-uefi:
+    name: Build S10e UEFI Firmware & Boot Image
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      B2L_BOARD: ${{ github.event.inputs.board || 'beyond0lte' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential gcc g++ clang lld llvm uuid-dev bison flex libssl-dev acpica-tools device-tree-compiler dos2unix python3-pip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Clone Mu-Silicium & S10 Reference Overlay
+        run: |
+          git clone --depth 1 --recursive https://github.com/Project-Silicium/Mu-Silicium.git $HOME/Mu-Silicium
+          git clone --depth 1 https://github.com/orhunnx/beyond2lte-uefi.git $HOME/beyond2lte-uefi
+          cp -r $HOME/beyond2lte-uefi/mu-silicium-overlay/* $HOME/Mu-Silicium/
+
+      - name: Generate S10e (beyond0lte) Platform Package
+        run: |
+          python3 scripts/make-board-platform.py \
+            --board beyond0lte \
+            --mu $HOME/Mu-Silicium \
+            --dtb common/dtb/beyond0lte.dtb
+
+      - name: Install Python Requirements for Mu-Silicium
+        run: |
+          cd $HOME/Mu-Silicium
+          python3 -m pip install --upgrade -r pip-requirements.txt
+
+      - name: Build S10e UEFI Firmware & Boot Image
+        run: |
+          cd $HOME/Mu-Silicium
+          python3 build_uefi.py -d beyond0lte -r RELEASE
+
+      - name: Prepare Boot Artifacts
+        run: |
+          mkdir -p out/boot
+          cp $HOME/Mu-Silicium/Mu-beyond0lte*.img out/boot/boot.img 2>/dev/null || true
+          cp $HOME/Mu-Silicium/Build/beyond0lte/RELEASE_CLANGPDB/FV/*.fd out/boot/ 2>/dev/null || true
+          ls -la out/boot/
+
+      - name: Upload S10e UEFI Boot Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: s10e-uefi-boot-image
+          path: out/boot/
