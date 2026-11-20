@@ -139,10 +139,6 @@ jobs:
           cp -r xnu/osfmk/arm/* "$B2L_DEPSROOT/usr/local/include/machine/" 2>/dev/null || true
           cp -r xnu/osfmk/vm/* "$B2L_DEPSROOT/usr/local/include/vm/" 2>/dev/null || true
 
-          # Stage libsa standalone headers (string.h, stdlib.h, types.h)
-          cp -r xnu/osfmk/libsa/* "$B2L_DEPSROOT/usr/local/include/" 2>/dev/null || true
-          cp -r xnu/osfmk/libsa/* "$B2L_DEPSROOT/usr/local/include/kernel/" 2>/dev/null || true
-
           # Stage uuid headers
           mkdir -p "$B2L_DEPSROOT/usr/local/include/uuid" "$B2L_DEPSROOT/usr/local/include/kernel/uuid"
           cp -r xnu/bsd/uuid/* "$B2L_DEPSROOT/usr/local/include/uuid/" 2>/dev/null || true
