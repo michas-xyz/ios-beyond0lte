@@ -21,7 +21,7 @@ xcodebuild -project "$src/libdispatch.xcodeproj" \
   DSTROOT="$B2L_DEPSROOT" \
   CODE_SIGNING_ALLOWED=NO \
   OTHER_CFLAGS='$(inherited) -mcpu=generic -march=armv8-a+crypto -w' \
-  HEADER_SEARCH_PATHS="$B2L_DEPSROOT/usr/local/include/kernel $B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders $B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/Headers $src $B2L_DEPSROOT/usr/local/include/os $B2L_DEPSROOT/usr/local/include/firehose $KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders" \
+  HEADER_SEARCH_PATHS="$B2L_DEPSROOT/usr/local/include $B2L_DEPSROOT/usr/local/include/kernel $B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders $B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/Headers $src $src/private $src/private/firehose $B2L_DEPSROOT/usr/local/include/os $B2L_DEPSROOT/usr/local/include/firehose $KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders $KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/Headers" \
   install
 
 cp "$B2L_DEPSROOT/usr/local/lib/kernel/liblibfirehose_kernel.a" "$B2L_DEPSROOT/usr/local/lib/kernel/libfirehose_kernel.a"

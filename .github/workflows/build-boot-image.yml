@@ -65,10 +65,25 @@ jobs:
           find /Library/Developer/KDKs -name "*.kdk" || true
           echo "KDK installed successfully!"
 
+      - name: Fetch Apple XNU Kernel Source
+        run: |
+          bash scripts/fetch-xnu.sh xnu
+
+      - name: Prepare XNU with S10e Board Patches & Overlay
+        run: |
+          bash scripts/prepare-xnu.sh xnu
+          echo "#define B2L_BUILD_EPOCH $(date +%s)" > xnu/iokit/Kernel/arm/b2l_build_epoch.h
+          touch xnu/iokit/Kernel/arm/B2LPlatformExpert.cpp
+
       - name: Setup AvailabilityVersions & Dependency Root
         run: |
           export B2L_DEPSROOT="$RUNNER_TEMP/deps"
-          mkdir -p "$B2L_DEPSROOT"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/os"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/firehose"
+          mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel"
+          mkdir -p "$B2L_DEPSROOT/usr/local/lib/kernel"
+          mkdir -p "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework"
+
           git clone --filter=blob:none https://github.com/apple-oss-distributions/AvailabilityVersions.git $RUNNER_TEMP/AvailabilityVersions
           git -C $RUNNER_TEMP/AvailabilityVersions checkout 149b1777f3e8c2133042d8e188f72e3adf6a7110
           bash tools/b1l/install-availability.sh $RUNNER_TEMP/AvailabilityVersions "$B2L_DEPSROOT"
@@ -82,29 +97,28 @@ jobs:
           git clone --filter=blob:none https://github.com/apple-oss-distributions/libdispatch.git $RUNNER_TEMP/libdispatch
           git -C $RUNNER_TEMP/libdispatch checkout 701f4d1a24ae9c6863901bbbb22624b7d1b87321
 
-          mkdir -p "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework"
+          # Stage Kernel.framework headers from KDK
           if [ -d "$KDKROOT/System/Library/Frameworks/Kernel.framework/Headers" ]; then
             ln -sf "$KDKROOT/System/Library/Frameworks/Kernel.framework/Headers" "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/Headers"
             ln -sf "$KDKROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders" "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/PrivateHeaders"
           fi
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/kernel"
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/os"
-          mkdir -p "$B2L_DEPSROOT/usr/local/include/firehose"
+
+          # Stage XNU internal os and firehose headers
+          cp -r xnu/libkern/os/* "$B2L_DEPSROOT/usr/local/include/os/" 2>/dev/null || true
+          cp -r xnu/bsd/sys/firehose* "$B2L_DEPSROOT/usr/local/include/firehose/" 2>/dev/null || true
+
+          # Stage libdispatch private headers
+          if [ -d "$RUNNER_TEMP/libdispatch/private/firehose" ]; then
+            cp -r "$RUNNER_TEMP/libdispatch/private/firehose/"* "$B2L_DEPSROOT/usr/local/include/firehose/" 2>/dev/null || true
+          fi
+          if [ -d "$RUNNER_TEMP/libdispatch/private/os" ]; then
+            cp -r "$RUNNER_TEMP/libdispatch/private/os/"* "$B2L_DEPSROOT/usr/local/include/os/" 2>/dev/null || true
+          fi
 
           export LIBDISPATCH_SRC="$RUNNER_TEMP/libdispatch"
           bash scripts/build-firehose.sh
           test -f "$B2L_DEPSROOT/usr/local/lib/kernel/libfirehose_kernel.a"
           echo "libfirehose_kernel.a built successfully!"
-
-      - name: Fetch Apple XNU Kernel Source
-        run: |
-          bash scripts/fetch-xnu.sh xnu
-
-      - name: Prepare XNU with S10e Board Patches & Overlay
-        run: |
-          bash scripts/prepare-xnu.sh xnu
-          echo "#define B2L_BUILD_EPOCH $(date +%s)" > xnu/iokit/Kernel/arm/b2l_build_epoch.h
-          touch xnu/iokit/Kernel/arm/B2LPlatformExpert.cpp
 
       - name: Build S10e XNU Kernel (mach.development.b2l)
         run: |
