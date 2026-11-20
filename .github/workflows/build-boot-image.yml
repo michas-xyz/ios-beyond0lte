@@ -178,6 +178,8 @@ jobs:
       - name: Build S10e UEFI Firmware & Boot Image
         run: |
           cd $HOME/Mu-Silicium
+          python3 Platforms/Samsung/beyond0ltePkg/DeviceBuild.py --setup -t RELEASE
+          python3 Platforms/Samsung/beyond0ltePkg/DeviceBuild.py --update -t RELEASE
           # Silence unused variable warnings on modern Clang
           find "$HOME/Mu-Silicium" -name "B2LGoster.c" -exec sed -i 's/UINT32                 Parca;/UINT32 Parca __attribute__((unused));/' {} +
           find "$HOME/Mu-Silicium" -name "B2LGoster.c" -exec sed -i 's/Parca++;/\/\/ Parca++;/' {} +
