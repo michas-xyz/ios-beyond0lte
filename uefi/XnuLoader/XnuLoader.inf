@@ -45,6 +45,7 @@
   ArmLib
   BaseLib
   BaseMemoryLib
+  PrintLib
   MemoryAllocationLib
   UefiApplicationEntryPoint
   UefiBootServicesTableLib

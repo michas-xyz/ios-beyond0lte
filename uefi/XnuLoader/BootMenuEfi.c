@@ -9,6 +9,8 @@
  */
 #include <Uefi.h>
 #include <Library/BaseLib.h>
+#include <Library/BaseMemoryLib.h>
+#include <Library/PrintLib.h>
 #include <Library/IoLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
@@ -45,6 +47,24 @@ STATIC CONST CHAR16 *mItems[B2L_MENU_COUNT] = {
 };
 STATIC EFI_GRAPHICS_OUTPUT_PROTOCOL *mGop;
 STATIC UINT32 *mPixels;     /* back buffer, one GOP mode in size, kept for the loader's lifetime */
+
+struct stride_mode {
+    UINT32 Stride;
+    UINT32 RenderW;
+    BOOLEAN UseBlt;
+    CONST CHAR8 *Name;
+};
+
+STATIC CONST struct stride_mode mModes[] = {
+    { 1440, 1080, FALSE, "1440 Stride (1080 UI)" },
+    { 1440, 1440, FALSE, "1440 Stride (1440 UI)" },
+    { 1080, 1080, FALSE, "1080 Stride (1080 UI)" },
+    { 1472, 1080, FALSE, "1472 Stride (64B align)" },
+    {  360,  360, FALSE, "360 Stride (1-slice)" },
+    {    0,    0, TRUE,  "GOP Blt (Original)" },
+};
+#define MODE_COUNT (sizeof(mModes) / sizeof(mModes[0]))
+STATIC UINTN mModeIndex = 0;
 
 STATIC UINT64
 NowMs(VOID)
@@ -90,22 +110,54 @@ STATIC VOID
 Draw(CONST struct b2l_menu *Menu, UINT64 Now, CONST CHAR8 *Note, CONST CHAR8 *Status)
 {
     unsigned Left = b2l_menu_seconds_left(Menu, Now);
-    if (mPixels == NULL && mGop == NULL &&
-        !EFI_ERROR(gBS->LocateProtocol(&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&mGop)) &&
-        mGop->Mode && mGop->Mode->Info && mGop->Mode->Info->PixelFormat == PixelBlueGreenRedReserved8BitPerColor)
-        mPixels = AllocatePool((UINTN)mGop->Mode->Info->HorizontalResolution * mGop->Mode->Info->VerticalResolution * 4);
-    if (mPixels) {
-        UINT32 W = mGop->Mode->Info->HorizontalResolution, H = mGop->Mode->Info->VerticalResolution;
-        struct b2l_menu_view View = { Menu->selected, Left, B2L_MENU_TIMEOUT_S, Status, Note };
-        b2l_menu_render(mPixels, W, W, H, &View);
-        if (!EFI_ERROR(mGop->Blt(mGop, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)mPixels, EfiBltBufferToVideo, 0, 0, 0, 0, W, H, 0)))
+    if (mGop == NULL) {
+        gBS->LocateProtocol(&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&mGop);
+    }
+    if (mPixels == NULL && mGop != NULL && mGop->Mode != NULL && mGop->Mode->Info != NULL &&
+        mGop->Mode->Info->PixelFormat == PixelBlueGreenRedReserved8BitPerColor) {
+        UINT32 MaxW = 1440;
+        UINT32 MaxH = 3040;
+        if (mGop->Mode->Info->HorizontalResolution > MaxW) MaxW = mGop->Mode->Info->HorizontalResolution;
+        if (mGop->Mode->Info->VerticalResolution > MaxH) MaxH = mGop->Mode->Info->VerticalResolution;
+        mPixels = AllocatePool((UINTN)MaxW * MaxH * 4);
+    }
+    if (mPixels && mGop && mGop->Mode && mGop->Mode->Info) {
+        CONST struct stride_mode *Mode = &mModes[mModeIndex];
+        UINT32 RenderW = Mode->RenderW ? Mode->RenderW : (mGop->Mode->Info->HorizontalResolution > 1080 ? 1080 : mGop->Mode->Info->HorizontalResolution);
+        UINT32 H = mGop->Mode->Info->VerticalResolution;
+        if (H == 0) H = 2280;
+        UINT32 Stride = Mode->Stride ? Mode->Stride : mGop->Mode->Info->PixelsPerScanLine;
+        if (Stride == 0) Stride = 1440;
+
+        CHAR8 ModeNote[128];
+        if (Note) {
+            AsciiStrCpyS(ModeNote, sizeof(ModeNote), Note);
+        } else {
+            AsciiSPrint(ModeNote, sizeof(ModeNote), "Mode %u: %a (Bixby to cycle)", (UINT32)mModeIndex, Mode->Name);
+        }
+
+        struct b2l_menu_view View = { Menu->selected, Left, B2L_MENU_TIMEOUT_S, Status, ModeNote };
+        b2l_menu_render(mPixels, RenderW, RenderW, H, &View);
+
+        if (Mode->UseBlt) {
+            if (!EFI_ERROR(mGop->Blt(mGop, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)mPixels, EfiBltBufferToVideo, 0, 0, 0, 0, RenderW, H, 0)))
+                return;
+        } else if (mGop->Mode->FrameBufferBase) {
+            volatile UINT32 *Fb = (volatile UINT32 *)(UINTN)mGop->Mode->FrameBufferBase;
+            for (UINT32 y = 0; y < H; y++) {
+                CopyMem((VOID *)(Fb + y * Stride), mPixels + y * RenderW, RenderW * 4);
+                if (Stride > RenderW) {
+                    ZeroMem((VOID *)(Fb + y * Stride + RenderW), (Stride - RenderW) * 4);
+                }
+            }
             return;
+        }
     }
     gST->ConOut->ClearScreen(gST->ConOut);
     Print(L"iOS 26 - Galaxy S10\r\n\r\n");
     for (UINTN I = 0; I < B2L_MENU_COUNT; I++)
         Print(L" %s %s\r\n", I == Menu->selected ? L">" : L" ", mItems[I]);
-    Print(L"\r\nVolume +/-: move    Power: select    Bixby: stop the timer\r\n");
+    Print(L"\r\nVolume +/-: move    Power: select    Bixby: cycle stride (%a)\r\n", mModes[mModeIndex].Name);
     if (Status) Print(L"%a\r\n", Status);
     else if (Left) Print(L"Booting iOS in %u s\r\n", Left);
     if (Note) Print(L"\r\n%a\r\n", Note);
@@ -175,6 +227,12 @@ B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown)
     for (;;) {
         enum b2l_menu_key Key = WaitKey(Timer, 100);
         UINT64 Now = NowMs();
+        if (Key == B2L_KEY_BACK) {
+            Menu.counting = 0;
+            mModeIndex = (mModeIndex + 1) % MODE_COUNT;
+            Draw(&Menu, Now, Note, NULL);
+            continue;
+        }
         enum b2l_menu_action Action = b2l_menu_event(&Menu, Key, Now);
         if (Action == B2L_ACT_NONE) continue;
         if (Action == B2L_ACT_REDRAW) { Draw(&Menu, Now, Note, NULL); continue; }
@@ -200,6 +258,16 @@ VOID
 B2lBootFailed(EFI_STATUS Status)
 {
     Print(L"\r\nBoot failed: %r. The messages above say where.\r\n", Status);
+    if (mGop && mGop->Mode && mGop->Mode->Info) {
+        Print(L"GOP: %ux%u Scan=%u FB=0x%lx\r\n",
+            mGop->Mode->Info->HorizontalResolution,
+            mGop->Mode->Info->VerticalResolution,
+            mGop->Mode->Info->PixelsPerScanLine,
+            mGop->Mode->FrameBufferBase);
+    }
+    Print(L"DECON[0..3]: 0x%08x 0x%08x 0x%08x 0x%08x\r\n",
+        MmioRead32(0x19030000), MmioRead32(0x19030004),
+        MmioRead32(0x19030010), MmioRead32(0x19030020));
     if (gST->ConIn == NULL) return;
     Print(L"Press any key to return to the menu.\r\n");
     while (WaitKey(NULL, 1000) == B2L_KEY_NONE) {}

@@ -44,7 +44,12 @@ BOARD_SPECS = {
         ),
         'dtb_magic': b'BEYOND0LTE',
         'display_name': 'Galaxy S10e',
-        'fb_width': 1080,
+        # Note: Exynos 9820 S-Boot initializes DECON IDMA hardware with a line pitch of
+        # 1440 pixels (5760 bytes) across the entire S10 family. Setting fb_width to 1080
+        # causes SimpleFbDxe and FrameBufferSerialPortLib to write with pitch 4320, resulting
+        # in a 360-pixel line shift every row (1080 / 360 = 3), tripling the image horizontally.
+        # Keeping fb_width at 1440 aligns scanlines with DECON hardware scanout.
+        'fb_width': 1440,
         'fb_height': 2280,
     },
 }

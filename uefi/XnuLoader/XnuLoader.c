@@ -165,7 +165,7 @@ static EFI_STATUS GetVideo(struct b2l_boot_video *Video)
         return EFI_BAD_BUFFER_SIZE;
     Required = Video->row_bytes * Video->height;
     if (Video->base > MAX_UINT64 - Required) return EFI_BAD_BUFFER_SIZE;
-    if (!Video->base || (Video->base & 3) || Video->width < 1184 || Video->height < 864 ||
+    if (!Video->base || (Video->base & 3) || Video->width < 800 || Video->height < 864 ||
         Gop->Mode->Info->PixelsPerScanLine < Video->width ||
         Required > Gop->Mode->FrameBufferSize) return EFI_BAD_BUFFER_SIZE;
     return EFI_SUCCESS;
