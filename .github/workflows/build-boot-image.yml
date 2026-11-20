@@ -93,7 +93,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git build-essential gcc g++ clang lld llvm uuid-dev bison flex libssl-dev acpica-tools device-tree-compiler dos2unix python3-pip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y git build-essential gcc g++ clang lld llvm uuid-dev bison flex libssl-dev acpica-tools device-tree-compiler dos2unix python3-pip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu mono-devel ca-certificates-mono nasm nuget
 
       - name: Clone Mu-Silicium & S10 Reference Overlay
         run: |
@@ -125,6 +125,7 @@ jobs:
       - name: Build S10e UEFI Firmware & Boot Image
         run: |
           cd $HOME/Mu-Silicium
+          export CLANGPDB_AARCH64_PREFIX=aarch64-linux-gnu-
           python3 build_uefi.py -d beyond0lte -r RELEASE
 
       - name: Prepare Boot Artifacts
