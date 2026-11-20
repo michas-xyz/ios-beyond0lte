@@ -25,6 +25,13 @@ if [[ ! -x "$EDK_TOOLS_BIN/GenFw" ]] && [[ -d "$EDK_TOOLS_PATH/Bin/Linux-x86-64"
   cp -r "$EDK_TOOLS_PATH/Bin/Linux-x86-64/"* "$EDK_TOOLS_BIN/" 2>/dev/null || true
 fi
 [[ -x "$EDK_TOOLS_BIN/GenFw" ]] || { echo 'Build native BaseTools first.' >&2; exit 1; }
+# Ensure Conf/ templates are populated for EDK II build.py
+mkdir -p "$WORKSPACE/Conf"
+for f in build_rule target tools_def; do
+  if [[ ! -f "$WORKSPACE/Conf/$f.txt" ]] && [[ -f "$EDK_TOOLS_PATH/Conf/$f.template" ]]; then
+    cp "$EDK_TOOLS_PATH/Conf/$f.template" "$WORKSPACE/Conf/$f.txt"
+  fi
+done
 mkdir -p "$WORKSPACE/B2LXnuPkg"
 rsync -a "$repo_root/uefi/" "$WORKSPACE/B2LXnuPkg/"
 rsync -a "$repo_root/common/cache/" "$WORKSPACE/B2LXnuPkg/XnuLoader/"
