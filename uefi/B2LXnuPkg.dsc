@@ -36,4 +36,4 @@
   B2LXnuPkg/XnuLoader/XnuLoader.inf
 
 [BuildOptions]
-  *_*_*_CC_FLAGS = -DB2L_DISPLAY_SCALE=$(B2L_DISPLAY_SCALE) -DB2L_FB_LOGICAL_W=$(B2L_FB_LOGICAL_W) -DB2L_FB_LOGICAL_H=$(B2L_FB_LOGICAL_H)
+  *_*_*_CC_FLAGS = -DB2L_DISPLAY_SCALE=$(B2L_DISPLAY_SCALE) -DB2L_FB_LOGICAL_W=$(B2L_FB_LOGICAL_W) -DB2L_FB_LOGICAL_H=$(B2L_FB_LOGICAL_H) -Wno-error=unused-but-set-variable -Wno-error=unused-variable -Wno-error

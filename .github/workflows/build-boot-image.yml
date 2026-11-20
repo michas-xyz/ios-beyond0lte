@@ -145,6 +145,30 @@ jobs:
             --board beyond0lte \
             --mu $HOME/Mu-Silicium \
             --dtb common/dtb/beyond0lte.dtb
+          ln -sf "$HOME/Mu-Silicium/Platforms/Samsung/beyond0ltePkg" "$HOME/Mu-Silicium/beyond0ltePkg"
+
+      - name: Build XnuLoader Application
+        run: |
+          sudo ln -sf $(which llvm-ar) /usr/bin/llvm-lib || true
+          mkdir -p "$HOME/Mu-Silicium/Mu_Basecore/BaseTools/Source/C/bin"
+          cp -r "$HOME/Mu-Silicium/Mu_Basecore/BaseTools/Bin/Linux-x86-64/"* "$HOME/Mu-Silicium/Mu_Basecore/BaseTools/Source/C/bin/" 2>/dev/null || true
+          make -C "$HOME/Mu-Silicium/Mu_Basecore/BaseTools/Source/C" -j$(nproc) || true
+
+          export WORKSPACE=$HOME/Mu-Silicium
+          export CLANG_BIN=/usr/bin/
+          export B2L_BOARD=beyond0lte
+          bash scripts/build-efi.sh
+
+          test -f "$HOME/Mu-Silicium/Build/B2LXnu/RELEASE_CLANGPDB/AARCH64/XnuLoader.efi"
+          echo "XnuLoader.efi built successfully!"
+
+      - name: Embed XnuLoader into S10e Firmware Profile
+        run: |
+          export B2L_BOARD=beyond0lte
+          python3 scripts/prepare-boot-firmware.py \
+            --mu $HOME/Mu-Silicium \
+            --loader $HOME/Mu-Silicium/Build/B2LXnu/RELEASE_CLANGPDB/AARCH64/XnuLoader.efi \
+            --loader-guid 92742D9E-1A4F-42F8-9DC9-53895297B2F4
 
       - name: Install Python Requirements for Mu-Silicium
         run: |
@@ -158,14 +182,15 @@ jobs:
           find "$HOME/Mu-Silicium" -name "B2LGoster.c" -exec sed -i 's/UINT32                 Parca;/UINT32 Parca __attribute__((unused));/' {} +
           find "$HOME/Mu-Silicium" -name "B2LGoster.c" -exec sed -i 's/Parca++;/\/\/ Parca++;/' {} +
           export CLANGPDB_AARCH64_PREFIX=aarch64-linux-gnu-
-          export PACKAGES_PATH="$HOME/Mu-Silicium:$HOME/Mu-Silicium/Silicon/Samsung:$HOME/Mu-Silicium/Silicon/Silicium:$HOME/Mu-Silicium/Mu_Basecore:$HOME/Mu-Silicium/Common/Mu:$HOME/Mu-Silicium/Common/Mu_OEM_Sample"
+          export PACKAGES_PATH="$HOME/Mu-Silicium:$HOME/Mu-Silicium/Platforms/Samsung:$HOME/Mu-Silicium/Silicon/Samsung:$HOME/Mu-Silicium/Silicon/Silicium:$HOME/Mu-Silicium/Mu_Basecore:$HOME/Mu-Silicium/Common/Mu:$HOME/Mu-Silicium/Common/Mu_OEM_Sample"
           python3 build_uefi.py -d beyond0lte -r RELEASE
 
       - name: Prepare Boot Artifacts
         run: |
           mkdir -p out/boot
           cp $HOME/Mu-Silicium/Mu-beyond0lte*.img out/boot/boot.img 2>/dev/null || true
-          cp $HOME/Mu-Silicium/Build/beyond0lte/RELEASE_CLANGPDB/FV/*.fd out/boot/ 2>/dev/null || true
+          cp $HOME/Mu-Silicium/Build/beyond0ltePkg/RELEASE_CLANGPDB/FV/*.fd out/boot/ 2>/dev/null || true
+          cp $HOME/Mu-Silicium/Build/B2LXnu/RELEASE_CLANGPDB/AARCH64/*.efi out/boot/ 2>/dev/null || true
           ls -la out/boot/
 
       - name: Upload S10e UEFI Boot Image Artifact
