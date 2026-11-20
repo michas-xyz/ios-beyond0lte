@@ -93,8 +93,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git build-essential gcc g++ clang lld llvm uuid-dev bison flex libssl-dev acpica-tools device-tree-compiler dos2unix python3-pip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu mono-devel mono-complete nasm ca-certificates
-          sudo cert-sync /etc/ssl/certs/ca-certificates.crt
+          sudo apt-get install -y git build-essential gcc g++ clang lld llvm uuid-dev bison flex libssl-dev acpica-tools device-tree-compiler dos2unix python3-pip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu mono-devel nasm
 
       - name: Clone Mu-Silicium & S10 Reference Overlay
         run: |
@@ -110,6 +109,18 @@ jobs:
           if [ -d "$HOME/beyond2lte-uefi/silicium-acpi-overlay" ]; then
             cp -r $HOME/beyond2lte-uefi/silicium-acpi-overlay/* $HOME/Mu-Silicium/Silicium-ACPI/ || true
           fi
+
+      - name: Configure NASM External Dependency Mock
+        run: |
+          for D in "$HOME/Mu-Silicium/Mu_Basecore/BaseTools/Bin/mu_nasm_extdep" "$HOME/Mu-Silicium/Mu_Basecore/BaseTools/Bin/nasm_extdep"; do
+            mkdir -p "$D/Linux-x86-64"
+            echo 'version: 20016.1.1' > "$D/extdep_state.yaml"
+            echo 'version: 20016.1.1' > "$D/Linux-x86-64/extdep_state.yaml"
+            ln -sf $(which nasm) "$D/nasm"
+            ln -sf $(which nasm) "$D/ndisasm"
+            ln -sf $(which nasm) "$D/Linux-x86-64/nasm"
+            ln -sf $(which nasm) "$D/Linux-x86-64/ndisasm"
+          done
 
       - name: Generate S10e (beyond0lte) Platform Package
         run: |
