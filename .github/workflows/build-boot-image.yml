@@ -116,6 +116,10 @@ jobs:
           cp -r "$clang_res"/* "$B2L_DEPSROOT/usr/local/include/" 2>/dev/null || true
           cp -r "$clang_res"/* "$B2L_DEPSROOT/usr/local/include/kernel/" 2>/dev/null || true
 
+          # Stage Availability headers into dependency root
+          cp -r "$B2L_DEPSROOT/usr/include/"* "$B2L_DEPSROOT/usr/local/include/" 2>/dev/null || true
+          cp -r "$B2L_DEPSROOT/usr/include/"* "$B2L_DEPSROOT/usr/local/include/kernel/" 2>/dev/null || true
+
           # Stage Kernel.framework headers from KDK
           if [ -d "$KDKROOT/System/Library/Frameworks/Kernel.framework/Headers" ]; then
             ln -sf "$KDKROOT/System/Library/Frameworks/Kernel.framework/Headers" "$B2L_DEPSROOT/System/Library/Frameworks/Kernel.framework/Headers"
