@@ -109,34 +109,60 @@ NowMs(VOID)
     return Frequency ? DivU64x64Remainder(Count, Frequency / 1000 ? Frequency / 1000 : 1, NULL) : 0;
 }
 
+#define B2L_GPA_BASE          0x15850000ULL
+#define B2L_GPA0_DAT          0x0004
+#define B2L_GPA2_DAT          0x0044
+
 STATIC enum b2l_menu_key
 ReadKey(VOID)
 {
     EFI_INPUT_KEY Key;
-    if (gST->ConIn == NULL || EFI_ERROR(gST->ConIn->ReadKeyStroke(gST->ConIn, &Key))) return B2L_KEY_NONE;
-    if (Key.ScanCode == SCAN_UP) return B2L_KEY_UP;
-    if (Key.ScanCode == SCAN_DOWN) return B2L_KEY_DOWN;
-    if (Key.UnicodeChar == CHAR_CARRIAGE_RETURN) return B2L_KEY_SELECT;
-    if (Key.ScanCode == SCAN_ESC) return B2L_KEY_BACK;
-    return B2L_KEY_NONE;    /* SCAN_LEFT/RIGHT: the keypad's power+volume long-press combos, unused here */
+    if (gST->ConIn != NULL && !EFI_ERROR(gST->ConIn->ReadKeyStroke(gST->ConIn, &Key))) {
+        if (Key.ScanCode == SCAN_UP) return B2L_KEY_UP;
+        if (Key.ScanCode == SCAN_DOWN) return B2L_KEY_DOWN;
+        if (Key.UnicodeChar == CHAR_CARRIAGE_RETURN) return B2L_KEY_SELECT;
+        if (Key.ScanCode == SCAN_ESC) return B2L_KEY_BACK;
+    }
+
+    /* Direct MMIO polling on Exynos 9820 GPA Alive registers */
+    UINT32 Gpa0 = MmioRead32(B2L_GPA_BASE + B2L_GPA0_DAT);
+    UINT32 Gpa2 = MmioRead32(B2L_GPA_BASE + B2L_GPA2_DAT);
+
+    STATIC BOOLEAN PrevVolUp = FALSE;
+    STATIC BOOLEAN PrevVolDown = FALSE;
+    STATIC BOOLEAN PrevPower = FALSE;
+    STATIC BOOLEAN PrevBixby = FALSE;
+
+    BOOLEAN VolUp   = !(Gpa0 & (1u << 3));
+    BOOLEAN VolDown = !(Gpa0 & (1u << 4));
+    BOOLEAN Bixby   = !(Gpa0 & (1u << 6));
+    BOOLEAN Power   = !(Gpa2 & (1u << 4));
+
+    enum b2l_menu_key Result = B2L_KEY_NONE;
+    if (VolUp && !PrevVolUp) Result = B2L_KEY_UP;
+    else if (VolDown && !PrevVolDown) Result = B2L_KEY_DOWN;
+    else if (Power && !PrevPower) Result = B2L_KEY_SELECT;
+    else if (Bixby && !PrevBixby) Result = B2L_KEY_BACK;
+
+    PrevVolUp   = VolUp;
+    PrevVolDown = VolDown;
+    PrevPower   = Power;
+    PrevBixby   = Bixby;
+
+    return Result;
 }
 
 /* Waits at most Ms for a key; returns at once when one arrives. */
 STATIC enum b2l_menu_key
 WaitKey(EFI_EVENT Timer, UINTN Ms)
 {
-    EFI_EVENT Events[2];
-    UINTN Count = 0, Index;
-    enum b2l_menu_key Key = ReadKey();
-    if (Key != B2L_KEY_NONE) return Key;
-    if (gST->ConIn != NULL) Events[Count++] = gST->ConIn->WaitForKey;
-    if (Timer == NULL || EFI_ERROR(gBS->SetTimer(Timer, TimerRelative, (UINT64)Ms * 10000))) {
-        gBS->Stall(Ms * 1000);
-        return ReadKey();
-    }
-    Events[Count++] = Timer;
-    gBS->WaitForEvent(Count, Events, &Index);
-    return ReadKey();
+    UINT64 Until = NowMs() + Ms;
+    do {
+        enum b2l_menu_key Key = ReadKey();
+        if (Key != B2L_KEY_NONE) return Key;
+        gBS->Stall(10 * 1000);  /* 10 ms polling slice */
+    } while (NowMs() < Until);
+    return B2L_KEY_NONE;
 }
 
 /* Graphics when the GOP is there and the back buffer fits in memory; otherwise the firmware text console. */

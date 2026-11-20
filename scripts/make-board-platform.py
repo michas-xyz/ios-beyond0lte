@@ -110,6 +110,41 @@ def main():
         if path.name == 'B2LGoster.c':
             new = new.replace('UINT32                 Parca;', 'UINT32                 Parca __attribute__((unused));')
             new = new.replace('Parca++;', '// Parca++;')
+        if path.name == 'MemoryMapLib.c':
+            if '{"GPA Alive",' not in text and '{"PMU",' in text:
+                new = new.replace(
+                    '  {"PMU",                0x15860000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},',
+                    '  {"GPA Alive",          0x15850000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},\n'
+                    '  {"PMU",                0x15860000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},'
+                )
+        if path.name == 'KeypadDeviceLib.c':
+            old_gpio_loop = (
+                '  if (mGpioProtocol == NULL) {\n'
+                '    return EFI_SUCCESS;\n'
+                '  }\n\n'
+                '  for (UINTN Index = 0; Index < (sizeof(KeyList) / sizeof(KeyList[0])); Index++) {\n'
+                '    KEY_CONTEXT_PRIVATE *Context = KeyList[Index];\n\n'
+                '    Status = mGpioProtocol->GetState (Context->BankId, Context->BankNumber, Context->Pin, &IsPressed);\n'
+                '    if (EFI_ERROR (Status)) {\n'
+                '      return Status;\n'
+                '    }\n\n'
+                '    LibKeyUpdateKeyStatus (&Context->EfiKeyContext, KeypadReturnApi, !IsPressed, Delta);\n'
+                '  }'
+            )
+            new_gpio_loop = (
+                '  UINT32 Gpa0 = MmioRead32 (0x15850004);\n'
+                '  UINT32 Gpa2 = MmioRead32 (0x15850044);\n'
+                '  BOOLEAN VolUp = !(Gpa0 & (1u << 3));\n'
+                '  BOOLEAN VolDown = !(Gpa0 & (1u << 4));\n'
+                '  BOOLEAN Bixby = !(Gpa0 & (1u << 6));\n'
+                '  BOOLEAN Power = !(Gpa2 & (1u << 4));\n'
+                '  LibKeyUpdateKeyStatus (&KeyContextVolumeUp.EfiKeyContext, KeypadReturnApi, VolUp, Delta);\n'
+                '  LibKeyUpdateKeyStatus (&KeyContextVolumeDown.EfiKeyContext, KeypadReturnApi, VolDown, Delta);\n'
+                '  LibKeyUpdateKeyStatus (&KeyContextPower.EfiKeyContext, KeypadReturnApi, Power, Delta);\n'
+                '  LibKeyUpdateKeyStatus (&KeyContextSpecial.EfiKeyContext, KeypadReturnApi, Bixby, Delta);'
+            )
+            if old_gpio_loop in text:
+                new = new.replace(old_gpio_loop, new_gpio_loop)
         if path.name == 'DeviceBuild.py':
             new = new.replace("'beyond2lte'", f"'{board}'").replace('"beyond2lte"', f'"{board}"')
         if new != text:
