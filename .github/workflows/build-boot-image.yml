@@ -97,9 +97,18 @@ jobs:
 
       - name: Clone Mu-Silicium & S10 Reference Overlay
         run: |
-          git clone --depth 1 --recursive https://github.com/Project-Silicium/Mu-Silicium.git $HOME/Mu-Silicium
+          git clone --depth 1 https://github.com/Project-Silicium/Mu-Silicium.git $HOME/Mu-Silicium
+          cd $HOME/Mu-Silicium
+          # Silicium-ACPI upstream squashed history, so clone from main directly
+          git clone --depth 1 https://github.com/Project-Silicium/Silicium-ACPI.git Silicium-ACPI
+          # Initialize all other submodules
+          git submodule update --init --recursive --depth 1 Binaries Common/Mu Common/Mu_OEM_Sample Mu_Basecore Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl
+          # Clone and apply beyond2lte-uefi reference overlay
           git clone --depth 1 https://github.com/orhunnx/beyond2lte-uefi.git $HOME/beyond2lte-uefi
           cp -r $HOME/beyond2lte-uefi/mu-silicium-overlay/* $HOME/Mu-Silicium/
+          if [ -d "$HOME/beyond2lte-uefi/silicium-acpi-overlay" ]; then
+            cp -r $HOME/beyond2lte-uefi/silicium-acpi-overlay/* $HOME/Mu-Silicium/Silicium-ACPI/ || true
+          fi
 
       - name: Generate S10e (beyond0lte) Platform Package
         run: |
