@@ -48,9 +48,7 @@ STATIC CONST CHAR16 *mItems[B2L_MENU_COUNT] = {
 STATIC EFI_GRAPHICS_OUTPUT_PROTOCOL *mGop;
 STATIC UINT32 *mPixels;     /* back buffer, one GOP mode in size, kept for the loader's lifetime */
 
-#define B2L_DPP_BASE          0x19020000ULL
 #define B2L_DECON_BASE        0x19030000ULL
-#define B2L_DMA_BASE          0x19070000ULL
 
 #define B2L_DECON_UPDATE_REQ  0x0060
 #define B2L_DECON_UPDATE_BITS ((1u << 31) | 0x3fu)
@@ -64,43 +62,15 @@ struct stride_mode {
 };
 
 STATIC CONST struct stride_mode mModes[] = {
-    { 1080, 1080, FALSE, "Mode 0: DECON 3-Slice Split (HW 3x360 -> 1080)" },
-    { 1080, 1080, FALSE, "Mode 1: DECON Single Window 1080 (HW Fullscreen)" },
-    {  360,  360, FALSE, "Mode 2: DECON Window 0 (HW 360 Slice Only)" },
-    { 1080, 1080, FALSE, "Mode 3: Linear 1080 FB Copy (No HW Change)" },
-    { 1440, 1080, FALSE, "Mode 4: Linear 1440 FB Copy (No HW Change)" },
-    {    0,    0, TRUE,  "Mode 5: GOP Blt (Original Firmware Blit)" },
+    { 1080, 1080, FALSE, "Mode 0: Linear 1080 (Default S10e)" },
+    {    0,    0, TRUE,  "Mode 1: GOP Blt (Firmware Blit)" },
+    { 1440, 1080, FALSE, "Mode 2: Linear 1440 Stride" },
+    { 1080, 1080, FALSE, "Mode 3: DECON HW Win 5/0 Fullscreen" },
 };
 #define MODE_COUNT (sizeof(mModes) / sizeof(mModes[0]))
 STATIC UINTN mModeIndex = 0;
 
-STATIC UINT32 mFbHits[16];
-STATIC UINTN  mFbHitCount = 0;
-STATIC CHAR8  mDiagBuf[128] = "Scanning registers...";
-
-STATIC VOID
-ScanFbRegisters(VOID)
-{
-    mFbHitCount = 0;
-    UINT64 bases[] = { B2L_DPP_BASE, B2L_DECON_BASE, B2L_DMA_BASE };
-    for (UINTN b = 0; b < 3; b++) {
-        for (UINT32 off = 0; off < 0x8000; off += 4) {
-            UINT32 val = MmioRead32(bases[b] + off);
-            if (val == 0xCA000000 && mFbHitCount < 16) {
-                mFbHits[mFbHitCount++] = (UINT32)(bases[b] + off);
-            }
-        }
-    }
-    if (mFbHitCount > 0) {
-        AsciiSPrint(mDiagBuf, sizeof(mDiagBuf), "FB hits (%u): %08x %08x %08x",
-                    (UINT32)mFbHitCount,
-                    mFbHits[0],
-                    mFbHitCount > 1 ? mFbHits[1] : 0,
-                    mFbHitCount > 2 ? mFbHits[2] : 0);
-    } else {
-        AsciiSPrint(mDiagBuf, sizeof(mDiagBuf), "No FB base registers found in scan");
-    }
-}
+STATIC CHAR8 mDiagBuf[128] = "S10e Display Ready";
 
 STATIC VOID
 TriggerDeconUpdate(VOID)
@@ -113,96 +83,20 @@ TriggerDeconUpdate(VOID)
 STATIC VOID
 ApplyDisplayMode(UINTN ModeIndex)
 {
-    if (mFbHitCount == 0) {
-        ScanFbRegisters();
-    }
-
-    if (ModeIndex == 0) {
-        /* Mode 0: DECON 3-Slice Split.
-         * Slice 0 -> 0xCA000000 (X = 0..359)
-         * Slice 1 -> 0xCA000000 + 1440 (X = 360..719)
-         * Slice 2 -> 0xCA000000 + 2880 (X = 720..1079)
-         * Stride = 1080 pixels (4320 bytes).
+    if (ModeIndex == 3) {
+        /* Mode 3: Hardware Window 5 and Window 0 fullscreen activation strictly via mapped DECON at 0x19030000.
+         * BG image size 1080x2280 (0x08E80438), window bounds (0,0)-(1079,2279) (0x08E70437).
          */
-        if (mFbHitCount >= 3) {
-            MmioWrite32(mFbHits[0], 0xCA000000);
-            MmioWrite32(mFbHits[1], 0xCA000000 + 1440);
-            MmioWrite32(mFbHits[2], 0xCA000000 + 2880);
-            for (UINTN i = 0; i < 3; i++) {
-                if ((mFbHits[i] & 0x0FFF) == 0x040) {
-                    MmioWrite32(mFbHits[i] + 0x800, 0xCA000000 + i * 1440);
-                    MmioWrite32(mFbHits[i] - 0x30, (2280 << 16) | 1080);
-                    MmioWrite32(mFbHits[i] + 0x800 - 0x30, (2280 << 16) | 1080);
-                }
-            }
-        }
-
-        // IDMA channels at 0x19070000
-        MmioWrite32(B2L_DMA_BASE + 0x1010, (2280 << 16) | 1080);
-        MmioWrite32(B2L_DMA_BASE + 0x1040, 0xCA000000);
-        MmioWrite32(B2L_DMA_BASE + 0x1810, (2280 << 16) | 1080);
-        MmioWrite32(B2L_DMA_BASE + 0x1840, 0xCA000000);
-
-        MmioWrite32(B2L_DMA_BASE + 0x2010, (2280 << 16) | 1080);
-        MmioWrite32(B2L_DMA_BASE + 0x2040, 0xCA000000 + 1440);
-        MmioWrite32(B2L_DMA_BASE + 0x2810, (2280 << 16) | 1080);
-        MmioWrite32(B2L_DMA_BASE + 0x2840, 0xCA000000 + 1440);
-
-        MmioWrite32(B2L_DMA_BASE + 0x3010, (2280 << 16) | 1080);
-        MmioWrite32(B2L_DMA_BASE + 0x3040, 0xCA000000 + 2880);
-        MmioWrite32(B2L_DMA_BASE + 0x3810, (2280 << 16) | 1080);
-        MmioWrite32(B2L_DMA_BASE + 0x3840, 0xCA000000 + 2880);
-
-        // Traditional DECON registers
-        MmioWrite32(B2L_DECON_BASE + 0x0150, 0xCA000000);
-        MmioWrite32(B2L_DECON_BASE + 0x0160, 0xCA000000 + 1440);
-        MmioWrite32(B2L_DECON_BASE + 0x0170, 0xCA000000 + 2880);
-        MmioWrite32(B2L_DECON_BASE + 0x0200, 4320);
-        MmioWrite32(B2L_DECON_BASE + 0x0204, 4320);
-        MmioWrite32(B2L_DECON_BASE + 0x0208, 4320);
-
-        TriggerDeconUpdate();
-    } else if (ModeIndex == 1) {
-        /* Mode 1: DECON Single Window 1080 Fullscreen.
-         * Disable Slice 1 and 2, expand Slice 0 to 1080x2280.
-         */
-        MmioWrite32(B2L_DMA_BASE + 0x2000, 0);
-        MmioWrite32(B2L_DMA_BASE + 0x3000, 0);
-        MmioWrite32(B2L_DECON_BASE + 0x1030, 0);
-        MmioWrite32(B2L_DECON_BASE + 0x1060, 0);
-        MmioWrite32(B2L_DECON_BASE + 0x0024, 0);
-        MmioWrite32(B2L_DECON_BASE + 0x0028, 0);
-
-        MmioWrite32(B2L_DMA_BASE + 0x1010, (2280 << 16) | 1080);
-        MmioWrite32(B2L_DMA_BASE + 0x1018, (2280 << 16) | 1080);
-        MmioWrite32(B2L_DMA_BASE + 0x1040, 0xCA000000);
-        MmioWrite32(B2L_DMA_BASE + 0x1810, (2280 << 16) | 1080);
-        MmioWrite32(B2L_DMA_BASE + 0x1840, 0xCA000000);
-
+        MmioWrite32(B2L_DECON_BASE + 0x0200, (2280 << 16) | 1080);
+        MmioWrite32(B2L_DECON_BASE + 0x0214, MmioRead32(B2L_DECON_BASE + 0x0214) | (1u << 20) | 1u);
         MmioWrite32(B2L_DECON_BASE + 0x1008, 0);
         MmioWrite32(B2L_DECON_BASE + 0x100C, (2279 << 16) | 1079);
-        MmioWrite32(B2L_DECON_BASE + 0x00B0, 0);
-        MmioWrite32(B2L_DECON_BASE + 0x00B4, (1079 << 11) | 2279);
-        MmioWrite32(B2L_DECON_BASE + 0x0150, 0xCA000000);
-        MmioWrite32(B2L_DECON_BASE + 0x0200, 4320);
-
+        MmioWrite32(B2L_DECON_BASE + 0x10F8, 0);
+        MmioWrite32(B2L_DECON_BASE + 0x10FC, (2279 << 16) | 1079);
         TriggerDeconUpdate();
-    } else if (ModeIndex == 2) {
-        /* Mode 2: Only Slice 0 active (360 width).
-         */
-        MmioWrite32(B2L_DMA_BASE + 0x2000, 0);
-        MmioWrite32(B2L_DMA_BASE + 0x3000, 0);
-        MmioWrite32(B2L_DECON_BASE + 0x1030, 0);
-        MmioWrite32(B2L_DECON_BASE + 0x1060, 0);
-        MmioWrite32(B2L_DECON_BASE + 0x0024, 0);
-        MmioWrite32(B2L_DECON_BASE + 0x0028, 0);
-
-        MmioWrite32(B2L_DMA_BASE + 0x1010, (2280 << 16) | 360);
-        MmioWrite32(B2L_DMA_BASE + 0x1040, 0xCA000000);
-        MmioWrite32(B2L_DECON_BASE + 0x0150, 0xCA000000);
-        MmioWrite32(B2L_DECON_BASE + 0x0200, 1440);
-
-        TriggerDeconUpdate();
+        AsciiStrCpyS(mDiagBuf, sizeof(mDiagBuf), "DECON HW Win 5/0 Fullscreen applied");
+    } else {
+        AsciiSPrint(mDiagBuf, sizeof(mDiagBuf), "%a", mModes[ModeIndex].Name);
     }
 }
 
@@ -370,7 +264,6 @@ B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown)
 
     enum b2l_menu_start Start = NoCountdown ? B2L_START_FORCE_MENU : ProbeStart(Timer);
     b2l_menu_init(&Menu, Remembered(), B2L_MENU_TIMEOUT_S * 1000u, Start, NowMs());
-    ScanFbRegisters();
     ApplyDisplayMode(mModeIndex);
     Draw(&Menu, NowMs(), Note, NULL);
     for (;;) {

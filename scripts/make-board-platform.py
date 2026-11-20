@@ -110,14 +110,6 @@ def main():
         if path.name == 'B2LGoster.c':
             new = new.replace('UINT32                 Parca;', 'UINT32                 Parca __attribute__((unused));')
             new = new.replace('Parca++;', '// Parca++;')
-        if path.name == 'MemoryMapLib.c':
-            if '{"DMA",' not in text and '{"Decon",' in text:
-                new = new.replace(
-                    '{"Decon",              0x19030000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},',
-                    '{"DPP",                0x19020000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},\n'
-                    '  {"Decon",              0x19030000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},\n'
-                    '  {"DMA",                0x19070000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},'
-                )
         if path.name == 'DeviceBuild.py':
             new = new.replace("'beyond2lte'", f"'{board}'").replace('"beyond2lte"', f'"{board}"')
         if new != text:
