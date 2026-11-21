@@ -66,11 +66,25 @@ python3 "$repo_root/scripts/apply-board-patches.py" "$xnu_path" \
   "$repo_root/patches/0056-b2l-scalar-pacga-siphash.patch" \
   "$repo_root/patches/0057-b2l-scoped-coregraphics-backtrace.patch" \
   "$repo_root/patches/0058-b2l-owned-launch-cache.patch" \
-  "$repo_root/patches/0059-b2l-typed-critical-exit.patch"
+  "$repo_root/patches/0059-b2l-typed-critical-exit.patch" \
+  "$repo_root/patches/0100-b2l-installd-apfs-fstype.patch" \
+  "$repo_root/patches/0101-b2l-report-arm64e-host-subtype.patch" \
+  "$repo_root/patches/0102-b2l-hfs-decmpfs-zlib-stored.patch" \
+  "$repo_root/patches/0103-b2l-kernel-rename-excl.patch" \
+  "$repo_root/patches/0105-b2l-phys-cache-op-unowned-page.patch" \
+  "$repo_root/patches/0106-b2l-pmap-owned-ram-is-dram-and-ptoa.patch" \
+  "$repo_root/patches/0108-b2l-el0-cache-maintenance.patch"
 # Port files have separate provenance and are applied as an overlay.
 rsync -a "$repo_root/xnu-overlay/" "$xnu_path/"
 # The keyed PACGA (QARMA5/SipHash) is gone; historical patches 0006/0056 still list its sources in conf/files.
 perl -ni -e 'print unless m{b2l_pacga_(qarma5|siphash)}' "$xnu_path/bsd/conf/files" "$xnu_path/osfmk/conf/files"
+# Register additional B2L services and crypto descriptors in conf/files
+grep -q "b2l_mali_core.c" "$xnu_path/bsd/conf/files" || echo "bsd/dev/b2l_mali_core.c optional b2l" >> "$xnu_path/bsd/conf/files"
+grep -q "B2LMaliService.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LMaliService.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
+grep -q "B2LMetalAccel.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LMetalAccel.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
+grep -q "B2LBluetooth.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LBluetooth.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
+grep -q "b2l_prof.c" "$xnu_path/osfmk/conf/files" || echo "osfmk/arm64/b2l_prof.c optional b2l" >> "$xnu_path/osfmk/conf/files"
+grep -q "b2l_ccsha1_ltc.c" "$xnu_path/osfmk/conf/files" || echo "osfmk/corecrypto/b2l_ccsha1_ltc.c optional b2l" >> "$xnu_path/osfmk/conf/files"
 python3 "$repo_root/scripts/build-userspace-bootstrap.py" --output "$xnu_path/bsd/kern/b2l_userspace_payload.h"
 for source_file in "$repo_root/common/cache/"*; do
   destination="$xnu_path/bsd/kern/$(basename "$source_file")"
