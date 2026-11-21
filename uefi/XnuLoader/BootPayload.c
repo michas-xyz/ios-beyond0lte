@@ -15,6 +15,7 @@
 
 #define PAYLOAD_LIMIT (128U * 1024U * 1024U)
 #define PAYLOAD_HEADER_SIZE 320U
+#define B2L_PAYLOAD_CHUNK_BYTES (64U * 1024U)
 STATIC UINT32 mBootUfsLun = MAX_UINT32;
 
 EFI_STATUS B2lGetBootUfsLun(UINT32 *Lun) {
@@ -53,12 +54,20 @@ EFI_STATUS B2lLoadBootPayload(VOID **Kernel, UINTN *KernelSize, UINT8 Seed[B2L_B
     VOID *Buffer;
     EFI_STATUS ReadStatus;
     if (EFI_ERROR(gBS->HandleProtocol(Handles[Index], &gEfiBlockIoProtocolGuid, (VOID **)&Block)) ||
-        !Block->Media->MediaPresent || !Block->Media->LogicalPartition ||
-        EFI_ERROR(gBS->HandleProtocol(Handles[Index], &gEfiDiskIoProtocolGuid, (VOID **)&Disk)) ||
-        EFI_ERROR(gBS->HandleProtocol(Handles[Index], &gEfiPartitionInfoProtocolGuid, (VOID **)&Partition)) ||
-        Partition->Type != PARTITION_TYPE_GPT ||
-        (CompareMem(Partition->Info.Gpt.PartitionName, L"BOOT", sizeof(L"BOOT")) != 0 &&
-         CompareMem(Partition->Info.Gpt.PartitionName, L"boot", sizeof(L"boot")) != 0)) continue;
+        !Block->Media->MediaPresent ||
+        EFI_ERROR(gBS->HandleProtocol(Handles[Index], &gEfiDiskIoProtocolGuid, (VOID **)&Disk))) continue;
+    // If partition info protocol is available, verify it is not an unrelated partition
+    if (!EFI_ERROR(gBS->HandleProtocol(Handles[Index], &gEfiPartitionInfoProtocolGuid, (VOID **)&Partition))) {
+      if (Partition->Type == PARTITION_TYPE_GPT) {
+        CONST CHAR16 *Name = Partition->Info.Gpt.PartitionName;
+        // Accept BOOT, boot, Boot, boot_a, etc. Reject explicitly named other partitions (system, userdata, cache, etc.)
+        BOOLEAN MightBeBoot = ((Name[0] == L'B' || Name[0] == L'b') &&
+                               (Name[1] == L'O' || Name[1] == L'o') &&
+                               (Name[2] == L'O' || Name[2] == L'o') &&
+                               (Name[3] == L'T' || Name[3] == L't'));
+        if (!MightBeBoot && Name[0] != L'\0') continue;
+      }
+    }
     // Reject overflow before converting LastBlock into a byte capacity.
     if (Block->Media->BlockSize == 0 || Block->Media->LastBlock == MAX_UINT64 ||
         Block->Media->LastBlock + 1 > MAX_UINT64 / Block->Media->BlockSize) continue;
@@ -92,8 +101,27 @@ EFI_STATUS B2lLoadBootPayload(VOID **Kernel, UINTN *KernelSize, UINT8 Seed[B2L_B
     if (b2l_boot_wifi_decode(Payload + 32 + B2L_BOOT_SEED_SIZE, CandidateMac) < 0) break;
     Buffer = AllocatePool((UINTN)Length);
     if (Buffer == NULL) { Status = EFI_OUT_OF_RESOURCES; break; }
-    ReadStatus = Disk->ReadDisk(Disk, MediaId, Offset + KernelOffset, (UINTN)Length, Buffer);
-    if (EFI_ERROR(ReadStatus)) { FreePool(Buffer); Status = ReadStatus; break; }
+
+    // Read payload in 64 KiB chunks to stay within UFS host controller DMA / PRDT transfer limits
+    UINTN RemainingBytes = (UINTN)Length;
+    UINT64 CurrentFileOffset = Offset + KernelOffset;
+    UINT8 *CurrentDest = (UINT8 *)Buffer;
+    ReadStatus = EFI_SUCCESS;
+    while (RemainingBytes > 0) {
+      UINTN Chunk = (RemainingBytes > B2L_PAYLOAD_CHUNK_BYTES) ? B2L_PAYLOAD_CHUNK_BYTES : RemainingBytes;
+      ReadStatus = Disk->ReadDisk(Disk, MediaId, CurrentFileOffset, Chunk, CurrentDest);
+      if (EFI_ERROR(ReadStatus)) {
+        Print(L"B2L: Chunk read failed at offset 0x%lx (size %u): %r\r\n", CurrentFileOffset, (UINT32)Chunk, ReadStatus);
+        FreePool(Buffer);
+        Status = ReadStatus;
+        break;
+      }
+      CurrentFileOffset += Chunk;
+      CurrentDest += Chunk;
+      RemainingBytes -= Chunk;
+    }
+    if (EFI_ERROR(ReadStatus)) break;
+
     if (Le32(Buffer) != 0xfeedfacf || Le32((UINT8 *)Buffer + 4) != 0x0100000c) {
       FreePool(Buffer);
       break;
