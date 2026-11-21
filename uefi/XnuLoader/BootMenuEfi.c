@@ -362,6 +362,12 @@ B2lBootFailed(EFI_STATUS Status)
         MmioRead32(0x19030000), MmioRead32(0x19030004),
         MmioRead32(0x19030010), MmioRead32(0x19030020));
     if (gST->ConIn == NULL) return;
+    // Flush pending keystrokes from the menu selection so the error screen does not flash and vanish
+    EFI_INPUT_KEY FlushKey;
+    while (!EFI_ERROR(gST->ConIn->ReadKeyStroke(gST->ConIn, &FlushKey))) {}
+    // Stall 2.5 seconds to ensure the error message is clearly readable on display
+    gBS->Stall(2500000);
+    while (!EFI_ERROR(gST->ConIn->ReadKeyStroke(gST->ConIn, &FlushKey))) {}
     Print(L"Press any key to return to the menu.\r\n");
     while (WaitKey(NULL, 1000) == B2L_KEY_NONE) {}
 }

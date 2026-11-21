@@ -247,6 +247,86 @@ STATIC VOID B2lConnectAll(VOID) {
   FreePool(Handles);
 }
 
+// Search physical RAM for an in-memory B2LXNU02 payload staged by S-Boot
+STATIC EFI_STATUS B2lTryLoadFromRam(
+  OUT VOID **Kernel,
+  OUT UINTN *KernelSize,
+  OUT UINT8 Seed[B2L_BOOT_SEED_SIZE],
+  OUT UINT8 WifiMac[6]
+) {
+  EFI_STATUS Status;
+  UINTN MapSize = 0, MapKey, DescSize;
+  UINT32 DescVersion;
+  EFI_MEMORY_DESCRIPTOR *MemMap = NULL;
+
+  Status = gBS->GetMemoryMap(&MapSize, MemMap, &MapKey, &DescSize, &DescVersion);
+  if (Status == EFI_BUFFER_TOO_SMALL) {
+    MapSize += 8192;
+    MemMap = AllocatePool(MapSize);
+    if (MemMap == NULL) return EFI_OUT_OF_RESOURCES;
+    Status = gBS->GetMemoryMap(&MapSize, MemMap, &MapKey, &DescSize, &DescVersion);
+  }
+  if (EFI_ERROR(Status) || MemMap == NULL) {
+    if (MemMap != NULL) FreePool(MemMap);
+    return EFI_NOT_FOUND;
+  }
+
+  UINTN NumEntries = MapSize / DescSize;
+  for (UINTN i = 0; i < NumEntries; i++) {
+    EFI_MEMORY_DESCRIPTOR *Desc = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)MemMap + i * DescSize);
+    if (Desc->Type != EfiConventionalMemory &&
+        Desc->Type != EfiLoaderData &&
+        Desc->Type != EfiBootServicesData &&
+        Desc->Type != EfiReservedMemoryType) {
+      continue;
+    }
+
+    UINT64 Base = Desc->PhysicalStart;
+    UINT64 RegionSize = Desc->NumberOfPages * 4096;
+    if (RegionSize < PAYLOAD_HEADER_SIZE + 4096) continue;
+
+    for (UINT64 Off = 0; Off + PAYLOAD_HEADER_SIZE + 4096 <= RegionSize; Off += 2048) {
+      UINT8 *Candidate = (UINT8 *)(UINTN)(Base + Off);
+      if (CompareMem(Candidate, "B2LXNU02", 8) != 0) continue;
+
+      UINT64 KernelOffset = Le64(Candidate + 24);
+      UINT64 Length = Le64(Candidate + 16);
+      if (Le32(Candidate + 8) != 2 || Le32(Candidate + 12) != PAYLOAD_HEADER_SIZE ||
+          KernelOffset != PAYLOAD_HEADER_SIZE || Length < 4096 || Length > PAYLOAD_LIMIT ||
+          Off + KernelOffset + Length > RegionSize) {
+        continue;
+      }
+
+      UINT8 *MachO = Candidate + KernelOffset;
+      if (Le32(MachO) != 0xfeedfacf || Le32(MachO + 4) != 0x0100000c) {
+        continue;
+      }
+
+      UINT8 CandidateMac[B2L_WIFI_MAC_BYTES];
+      if (b2l_boot_wifi_decode(Candidate + 32 + B2L_BOOT_SEED_SIZE, CandidateMac) < 0) {
+        continue;
+      }
+
+      VOID *Buffer = AllocatePool((UINTN)Length);
+      if (Buffer == NULL) {
+        FreePool(MemMap);
+        return EFI_OUT_OF_RESOURCES;
+      }
+      CopyMem(Buffer, MachO, (UINTN)Length);
+      CopyMem(Seed, Candidate + 32, B2L_BOOT_SEED_SIZE);
+      CopyMem(WifiMac, CandidateMac, B2L_WIFI_MAC_BYTES);
+      *Kernel = Buffer;
+      *KernelSize = (UINTN)Length;
+      FreePool(MemMap);
+      Print(L"B2L: found and loaded XNU from RAM at 0x%lx (%u bytes)\r\n", Base + Off, (UINT32)Length);
+      return EFI_SUCCESS;
+    }
+  }
+
+  FreePool(MemMap);
+  return EFI_NOT_FOUND;
+}
+
 EFI_STATUS B2lLoadBootPayload(VOID **Kernel, UINTN *KernelSize, UINT8 Seed[B2L_BOOT_SEED_SIZE], UINT8 WifiMac[6]) {
   EFI_HANDLE *Handles = NULL;
   UINTN Count = 0;
@@ -257,7 +337,14 @@ EFI_STATUS B2lLoadBootPayload(VOID **Kernel, UINTN *KernelSize, UINT8 Seed[B2L_B
   *KernelSize = 0;
   mBootUfsLun = MAX_UINT32;
 
-  // Connect all controllers first so UfsDxe and PartitionDxe bind to UFS host hardware
+  // First try loading XNU payload directly from physical RAM if staged by S-Boot
+  B2lSetErrorStage("Probing RAM for XNU");
+  Status = B2lTryLoadFromRam(Kernel, KernelSize, Seed, WifiMac);
+  if (!EFI_ERROR(Status)) {
+    return EFI_SUCCESS;
+  }
+
+  // Connect all controllers so UfsDxe and PartitionDxe bind to UFS host hardware
   B2lConnectAll();
 
   // Allocate 64 KiB bounce buffer below 4 GiB for safe 32-bit DMA alignment
