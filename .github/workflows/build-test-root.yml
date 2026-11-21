@@ -1,0 +1,113 @@
+name: Build S10e Minimal HFS+ Test Root
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build-test-root.yml'
+  workflow_dispatch:
+
+jobs:
+  build-root:
+    name: Build Minimal HFS+ Test Root Image
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compile Minimal Standalone ARM64 Mach-O launchd
+        run: |
+          mkdir -p build-root/sbin
+          cat << 'EOF' > launchd_test.s
+          .text
+          .globl _start
+          .align 2
+
+          _start:
+              // write(1, msg, len)
+              mov x0, #1
+              adr x1, msg
+              mov x2, #(msg_end - msg)
+              mov x16, #4
+              svc #0x80
+
+          loop:
+              // nanosleep(timespec, 0)
+              adr x0, timespec
+              mov x1, #0
+              mov x16, #340
+              svc #0x80
+
+              // write(1, dot, 1)
+              mov x0, #1
+              adr x1, dot
+              mov x2, #1
+              mov x16, #4
+              svc #0x80
+
+              b loop
+
+          msg:
+              .ascii "\n"
+              .ascii "========================================================\n"
+              .ascii "*** B2L: HELLO FROM USERSPACE (PID 1) ON GALAXY S10e! ***\n"
+              .ascii "========================================================\n\n"
+          msg_end:
+
+          dot:
+              .ascii "."
+
+          .align 3
+          timespec:
+              .quad 2
+              .quad 0
+          EOF
+
+          # Compile pure standalone ARM64 Mach-O executable
+          clang -target arm64-apple-macos -nostdlib -Wl,-e,_start launchd_test.s -o build-root/sbin/launchd
+          codesign --force --sign - build-root/sbin/launchd || true
+          chmod 755 build-root/sbin/launchd
+          ls -la build-root/sbin/launchd
+          file build-root/sbin/launchd
+
+      - name: Create Case-sensitive Journaled HFS+ Image
+        run: |
+          mkdir -p out
+          # Create a 256 MiB HFS+ volume (B2LIOSROOT)
+          hdiutil create -size 256m -layout NONE -fs "Case-sensitive Journaled HFS+" -volname B2LIOSROOT -type UDTO out/test-root.hfs
+          mv out/test-root.hfs.cdr out/userdata.img
+
+          # Attach image with diskimage-class=CRawDiskImage
+          MNT=$(hdiutil attach -nobrowse -owners on -imagekey diskimage-class=CRawDiskImage out/userdata.img | grep -o '/Volumes/.*' | head -1)
+          echo "Mounted HFS+ image at $MNT"
+
+          # Populate required directories
+          sudo mkdir -p "$MNT/sbin" "$MNT/bin" "$MNT/usr/bin" "$MNT/dev" "$MNT/private/var/log" "$MNT/private/etc"
+          sudo cp build-root/sbin/launchd "$MNT/sbin/launchd"
+          sudo chmod 755 "$MNT/sbin/launchd"
+
+          # Verify layout
+          ls -la "$MNT/sbin/"
+
+          # Cleanly detach so HFS+ journal is cleanly closed
+          sync
+          hdiutil detach "$MNT"
+
+          # Verify HFS+ headers using python
+          python3 - << 'EOF'
+          with open("out/userdata.img", "rb") as f:
+              f.seek(1024)
+              vh = f.read(512)
+          print("Signature:", vh[:2])
+          assert vh[:2] in (b"H+", b"HX"), "Invalid HFS signature!"
+          print("HFS+ volume header valid!")
+          EOF
+
+          # Compress with gzip for quick transfer
+          gzip -9 -c out/userdata.img > out/userdata.img.gz
+          ls -lh out/
+
+      - name: Upload Minimal Root Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: s10e-test-root
+          path: out/userdata.img.gz
