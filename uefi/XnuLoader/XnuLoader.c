@@ -303,12 +303,6 @@ STATIC EFI_STATUS B2lBootXnu(EFI_HANDLE ImageHandle)
         if (!EFI_ERROR(B2lGetBootUfsLun(&Dt.boot_ufs_lun))) Dt.has_boot_ufs_lun = 1;
         else Print(L"B2L: BOOT UFS device path unrecognized; native storage will remain unavailable.\r\n");
     }
-    else if (Status == EFI_NOT_FOUND || Status == EFI_UNSUPPORTED) {
-        B2lSetErrorStage("Reading fallback kernel");
-        Status = OpenRoot(ImageHandle, &Root);
-        if (!EFI_ERROR(Status))
-            Status = ReadFile(Root, L"\\EFI\\B2L\\kernel", B2L_MAX_KERNEL, &Kernel, &KernelSize);
-    }
     if (EFI_ERROR(Status)) { Print(L"Cannot read XNU payload: %r\r\n", Status); goto Fail; }
     B2lSetErrorStage("Parsing Mach-O");
     ParseResult = b2l_parse_macho(Kernel, KernelSize, &Mach);
