@@ -44,7 +44,7 @@ static inline uint64_t b2l_ufs_be64(const uint8_t *p)
 { return (uint64_t)b2l_ufs_be32(p)<<32|b2l_ufs_be32(p+4); }
 static inline int b2l_ufs_read_opcode(const uint8_t cdb[16])
 {
-    return cdb[0]==0x00 || cdb[0]==0x03 || cdb[0]==0x25 ||
+    return cdb[0]==0x00 || cdb[0]==0x03 || cdb[0]==0x1b || cdb[0]==0x25 ||
         cdb[0]==0x28 || cdb[0]==0x88 || (cdb[0]==0x9e && cdb[1]==0x10);
 }
 static inline int b2l_ufs_write_opcode(const uint8_t cdb[16])

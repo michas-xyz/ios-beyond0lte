@@ -89,18 +89,34 @@ static int geometry(void)
     uint8_t cdb[16]={0};
     uint8_t *data=(void *)(host.dma+B2L_UFS_DATA_OFFSET);
     int error;
-    /* A previous boot environment can leave a single UNIT ATTENTION pending.
-     * Clear it with REQUEST SENSE; don't silently accept any failed command. */
-    for(unsigned retry=0;retry<3;retry++) {
+    /* A previous boot environment can leave a pending UNIT ATTENTION or require
+     * START STOP UNIT to transition from stopped/standby to active. */
+    for(unsigned retry=0;retry<10;retry++) {
         bzero(cdb,sizeof(cdb));error=command(cdb,0,NULL);
         if(!error)break;
-        printf("B2L UFS: TUR pending sense (retry %u), clearing with REQUEST SENSE...\n", retry);
-        if(error!=B2L_UFS_SCSI_ERROR || retry==2)return to_errno(error);
+        printf("B2L UFS: TUR not ready (retry %u), checking sense...\n", retry);
+        if(error!=B2L_UFS_SCSI_ERROR || retry==9)return to_errno(error);
         cdb[0]=3;cdb[4]=18;
         error=command(cdb,18,NULL);
         if(!error) {
-            printf("B2L UFS: sense key=0x%x asc=0x%x ascq=0x%x (UNIT ATTENTION cleared)\n",
-                data[2]&0xf, data[12], data[13]);
+            uint8_t key = data[2] & 0xf;
+            uint8_t asc = data[12];
+            uint8_t ascq = data[13];
+            printf("B2L UFS: sense key=0x%x asc=0x%x ascq=0x%x\n", key, asc, ascq);
+            if(key == 2 && asc == 4 && ascq == 2) {
+                /* 02/04/02: LOGICAL UNIT NOT READY, INITIALIZING COMMAND REQUIRED */
+                printf("B2L UFS: issuing START STOP UNIT (START=1) to activate LUN...\n");
+                bzero(cdb, sizeof(cdb));
+                cdb[0] = 0x1b; // START STOP UNIT
+                cdb[4] = 0x01; // START = 1
+                int start_err = command(cdb, 0, NULL);
+                printf("B2L UFS: START STOP UNIT result=%d\n", start_err);
+                delay(50000); // 50ms wait for media spinup
+            } else if(key == 2 && asc == 4 && ascq == 1) {
+                /* 02/04/01: LOGICAL UNIT NOT READY, BECOMING READY */
+                printf("B2L UFS: LUN becoming ready, waiting...\n");
+                delay(50000);
+            }
         }
         if(error)return to_errno(error);
     }
@@ -116,6 +132,7 @@ static int geometry(void)
     if(last==UINT64_MAX || !last || size<512 || size>4096 || (size&(size-1)) ||
         last+1>UINT64_MAX/size)return EIO;
     host.geometry.block_count=last+1;host.geometry.block_size=size;
+    printf("B2L UFS: ready! blocks=%llu block_size=%u\n", host.geometry.block_count, host.geometry.block_size);
     return 0;
 }
 static int wait_run_bit(uint32_t offset,uint32_t expected)
