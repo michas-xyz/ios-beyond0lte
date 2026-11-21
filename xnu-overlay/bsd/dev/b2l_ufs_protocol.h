@@ -114,9 +114,9 @@ static inline int b2l_ufs_result(const struct b2l_ufs_utrd *tr,
     const struct b2l_ufs_ucd *ucd,uint8_t lun,uint8_t tag)
 {
     const uint8_t *r=ucd->response;
-    if ((tr->dword[2]&255)!=0 || r[0]!=0x21 || r[2]!=lun || r[3]!=tag || r[6] ||
-        (r[1]&0x60) || b2l_ufs_be32(r+12)!=0) return B2L_UFS_IO_ERROR;
+    if (r[0]!=0x21 || r[2]!=lun || r[3]!=tag || (r[1]&0x60) || b2l_ufs_be32(r+12)!=0) return B2L_UFS_IO_ERROR;
     if(r[7])return B2L_UFS_SCSI_ERROR;
+    if ((tr->dword[2]&255)!=0 || r[6]) return B2L_UFS_IO_ERROR;
     return B2L_UFS_OK;
 }
 /* The descriptor builder permits only explicit read/write block commands,

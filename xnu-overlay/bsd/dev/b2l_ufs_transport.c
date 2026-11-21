@@ -73,11 +73,13 @@ static int command(const uint8_t cdb[16],uint32_t bytes,const void *data_out)
     vs_write(0x40,0xffffffffU); /* SCSI nexus, preserving existing vendor format. */
     error=b2l_ufs_execute(&host.io,tr,ucd,(uint8_t)host.geometry.lun,0);
     if(error) {
-        uint32_t status=native_read(NULL,0x20);
-        /* An unfinished transaction may still DMA. Keep its permanent memory
-         * pinned and prohibit all later commands instead of reusing it. */
-        if(native_read(NULL,0x58)!=0 || (status&B2L_UFS_FATAL))host.poisoned=1;
-        printf("B2L UFS: command 0x%x failed error=%d OCS=0x%x response=0x%x status=0x%x\n",
+        if(error!=B2L_UFS_SCSI_ERROR) {
+            uint32_t status=native_read(NULL,0x20);
+            /* An unfinished transaction may still DMA. Keep its permanent memory
+             * pinned and prohibit all later commands instead of reusing it. */
+            if(native_read(NULL,0x58)!=0 || (status&B2L_UFS_FATAL))host.poisoned=1;
+        }
+        printf("B2L UFS: command 0x%x result error=%d OCS=0x%x response=0x%x status=0x%x\n",
             cdb[0],error,tr->dword[2],ucd->response[6],ucd->response[7]);
     }
     return error;
@@ -92,9 +94,15 @@ static int geometry(void)
     for(unsigned retry=0;retry<3;retry++) {
         bzero(cdb,sizeof(cdb));error=command(cdb,0,NULL);
         if(!error)break;
+        printf("B2L UFS: TUR pending sense (retry %u), clearing with REQUEST SENSE...\n", retry);
         if(error!=B2L_UFS_SCSI_ERROR || retry==2)return to_errno(error);
         cdb[0]=3;cdb[4]=18;
-        error=command(cdb,18,NULL);if(error)return to_errno(error);
+        error=command(cdb,18,NULL);
+        if(!error) {
+            printf("B2L UFS: sense key=0x%x asc=0x%x ascq=0x%x (UNIT ATTENTION cleared)\n",
+                data[2]&0xf, data[12], data[13]);
+        }
+        if(error)return to_errno(error);
     }
     bzero(cdb,sizeof(cdb));cdb[0]=0x25;
     error=command(cdb,8,NULL);if(error)return to_errno(error);
