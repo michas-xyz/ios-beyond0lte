@@ -231,6 +231,22 @@ STATIC EFI_STATUS B2lTryLoad(
   return EFI_SUCCESS;
 }
 
+// Recursively connect all hardware controllers so UfsDxe and PartitionDxe bind to storage
+STATIC VOID B2lConnectAll(VOID) {
+  EFI_HANDLE *Handles = NULL;
+  UINTN Count = 0;
+  EFI_STATUS Status;
+
+  Status = gBS->LocateHandleBuffer(AllHandles, NULL, NULL, &Count, &Handles);
+  if (EFI_ERROR(Status)) return;
+
+  for (UINTN Index = 0; Index < Count; Index++) {
+    (VOID)gBS->ConnectController(Handles[Index], NULL, NULL, TRUE);
+  }
+
+  FreePool(Handles);
+}
+
 EFI_STATUS B2lLoadBootPayload(VOID **Kernel, UINTN *KernelSize, UINT8 Seed[B2L_BOOT_SEED_SIZE], UINT8 WifiMac[6]) {
   EFI_HANDLE *Handles = NULL;
   UINTN Count = 0;
@@ -240,6 +256,9 @@ EFI_STATUS B2lLoadBootPayload(VOID **Kernel, UINTN *KernelSize, UINT8 Seed[B2L_B
   *Kernel = NULL;
   *KernelSize = 0;
   mBootUfsLun = MAX_UINT32;
+
+  // Connect all controllers first so UfsDxe and PartitionDxe bind to UFS host hardware
+  B2lConnectAll();
 
   // Allocate 64 KiB bounce buffer below 4 GiB for safe 32-bit DMA alignment
   EFI_PHYSICAL_ADDRESS BounceAddress = 0xFFFFFFFF;
