@@ -10,5 +10,6 @@ typedef enum { B2L_CHOICE_BOOT } B2L_BOOT_CHOICE;
 B2L_BOOT_CHOICE B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown);
 /* Leaves the loader's own error messages on screen until a key is pressed. */
 VOID B2lBootFailed(EFI_STATUS Status);
+VOID B2lSetErrorStage(CONST CHAR8 *Stage);
 
 #endif

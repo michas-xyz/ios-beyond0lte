@@ -291,8 +291,10 @@ STATIC EFI_STATUS B2lBootXnu(EFI_HANDLE ImageHandle)
     Print(L"beyond2lte XNU ARM64 loader (eight CPU, M4 trial)\r\n");
     if (ReadCurrentEl() != 1) {
         Print(L"Unsupported CurrentEL: EL1 is required.\r\n");
+        B2lSetErrorStage("EL1 check failed");
         return EFI_UNSUPPORTED;
     }
+    B2lSetErrorStage("Searching BOOT payload");
     Status = B2lLoadBootPayload(&Kernel, &KernelSize, Dt.random_seed, Dt.wifi_mac);
     if (!EFI_ERROR(Status)) {
         PayloadSeed = TRUE;
@@ -302,11 +304,13 @@ STATIC EFI_STATUS B2lBootXnu(EFI_HANDLE ImageHandle)
         else Print(L"B2L: BOOT UFS device path unrecognized; native storage will remain unavailable.\r\n");
     }
     else if (Status == EFI_NOT_FOUND || Status == EFI_UNSUPPORTED) {
+        B2lSetErrorStage("Reading fallback kernel");
         Status = OpenRoot(ImageHandle, &Root);
         if (!EFI_ERROR(Status))
             Status = ReadFile(Root, L"\\EFI\\B2L\\kernel", B2L_MAX_KERNEL, &Kernel, &KernelSize);
     }
     if (EFI_ERROR(Status)) { Print(L"Cannot read XNU payload: %r\r\n", Status); goto Fail; }
+    B2lSetErrorStage("Parsing Mach-O");
     ParseResult = b2l_parse_macho(Kernel, KernelSize, &Mach);
     if (ParseResult != 0) {
         Print(L"Refusing Mach-O: parser error %d\r\n", ParseResult);
@@ -316,11 +320,13 @@ STATIC EFI_STATUS B2lBootXnu(EFI_HANDLE ImageHandle)
     if (Used > B2L_MIN_ARENA - B2L_DT_SPACE - sizeof(*Args) - 8192) {
         Status = EFI_BAD_BUFFER_SIZE; goto Fail;
     }
+    B2lSetErrorStage("Getting entropy");
     Status = GetSeed(Root, PayloadSeed, Dt.random_seed);
     if (EFI_ERROR(Status)) {
         Print(L"No genuine entropy: EFI RNG or a fresh 256-byte host seed is required.\r\n");
         goto Fail;
     }
+    B2lSetErrorStage("Setting video");
     Status = GetVideo(&Dt.video);
     if (EFI_ERROR(Status)) {
         Print(L"Unsupported GOP framebuffer: %r\r\n", Status); goto Fail;
@@ -329,16 +335,19 @@ STATIC EFI_STATUS B2lBootXnu(EFI_HANDLE ImageHandle)
     if (!Dt.counter_frequency) { Status = EFI_UNSUPPORTED; goto Fail; }
     MemoryMap = AllocatePool(B2L_MAP_SPACE);
     if (!MemoryMap) { Status=EFI_OUT_OF_RESOURCES; goto Fail; }
+    B2lSetErrorStage("Allocating secondary");
     Status=AllocateSecondary(MemoryMap,&SecondaryAllocation);
     if(EFI_ERROR(Status)){Print(L"No safe low secondary page: %r\r\n",Status);goto Fail;}
     Dt.secondary_base=SecondaryAllocation;Dt.secondary_size=B2L_SECONDARY_BYTES;
     Print(L"B2L: firmware-owned secondary page PA 0x%lx (16 KiB)\r\n",SecondaryAllocation);
+    B2lSetErrorStage("Allocating arena");
     Status = AllocateArena(MemoryMap, &Allocation, &ArenaSize, &Pages);
     if (EFI_ERROR(Status)) { Print(L"No contiguous EFI conventional-memory arena of at least 1 GiB: %r\r\n",Status); goto Fail; }
     Base = Allocation;
     /* Only this reserved EFI allocation is advertised as normal RAM to XNU.
      * Firmware, framebuffer and UFS/MMIO ranges are never added as free RAM. */
     Dt.memory_base = Base; Dt.memory_size = ArenaSize;
+    B2lSetErrorStage("Copying segments");
     for (UINTN I = 0; I < Mach.segment_count; ++I) {
         struct b2l_segment *S = &Mach.segments[I];
         VOID *Dest = (VOID *)(UINTN)(Base + S->va - Mach.virtual_base);
@@ -357,9 +366,11 @@ STATIC EFI_STATUS B2lBootXnu(EFI_HANDLE ImageHandle)
     if(CacheSize){Dt.native_cache_base=CachePhysical;Dt.native_cache_size=CacheSize;}
     DtPhysical = ALIGN_VALUE(CachePhysical+CacheSize, 4096);
     B2lTouchHandoff(Dt.touch_status);
+    B2lSetErrorStage("Claiming extra RAM");
     Status=ClaimExtraRam(MemoryMap,&Dt);
     if(EFI_ERROR(Status)){Print(L"Cannot reserve additional RAM: %r\r\n",Status);goto Fail;}
     Print(L"B2L: total owned RAM %lu MiB in %u ranges\r\n",b2l_ram_bytes(Dt.ram,Dt.ram_count)>>20,Dt.ram_count);
+    B2lSetErrorStage("Building device tree");
     Status = b2l_build_device_tree((VOID *)(UINTN)DtPhysical, B2L_DT_SPACE, &Dt, &DtSize) == 0
              ? EFI_SUCCESS : EFI_BAD_BUFFER_SIZE;
     ZeroMem(Dt.random_seed, sizeof(Dt.random_seed));
@@ -384,9 +395,11 @@ STATIC EFI_STATUS B2lBootXnu(EFI_HANDLE ImageHandle)
     Entry = Base + Mach.entry - Mach.virtual_base;
     if(Kernel){FreePool(Kernel); Kernel = NULL;}
     if (Root) { Root->Close(Root); Root = NULL; }
+    B2lSetErrorStage("Loaded image protocol");
     Status = gBS->HandleProtocol(ImageHandle, &gEfiLoadedImageProtocolGuid, (VOID **)&Image);
     if (EFI_ERROR(Status)) goto Fail;
     __asm__ volatile("mov %0, sp" : "=r"(Stack));
+    B2lSetErrorStage("Identity mapping check");
     if (!IdentityRange((UINTN)Image->ImageBase, Image->ImageSize) ||
         !IdentityRange(Stack & ~4095ULL, 4096) ||
         !IdentityRange(Base, Args->top_of_kernel_data - Base)) {
@@ -406,6 +419,7 @@ STATIC EFI_STATUS B2lBootXnu(EFI_HANDLE ImageHandle)
         Status=EFI_UNSUPPORTED; goto Fail;
     }
     B2lProgressPrepare(Dt.video.base,Dt.video.row_bytes,Dt.video.width,Dt.video.height,&Handoff);
+    B2lSetErrorStage("ExitBootServices loop");
     /* No console, allocation, protocol or other boot-service calls after the
      * first ExitBootServices attempt. Firmware may invalidate the map key.
      * Before that first attempt boot services are intact: a failure goes back to the menu.

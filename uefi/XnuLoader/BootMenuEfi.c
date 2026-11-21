@@ -322,6 +322,16 @@ B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown)
     return Choice;
 }
 
+STATIC CHAR8 mErrorStage[128] = "Init";
+
+VOID
+B2lSetErrorStage(CONST CHAR8 *Stage)
+{
+    if (Stage != NULL) {
+        AsciiStrCpyS(mErrorStage, sizeof(mErrorStage), Stage);
+    }
+}
+
 VOID
 B2lBootFailed(EFI_STATUS Status)
 {
@@ -330,15 +340,17 @@ B2lBootFailed(EFI_STATUS Status)
         UINT32 H = mGop->Mode->Info->VerticalResolution ? mGop->Mode->Info->VerticalResolution : 2280;
         UINT32 Stride = 1080;
         CHAR8 Msg[128];
+        CHAR8 SubMsg[128];
         AsciiSPrint(Msg, sizeof(Msg), "Boot failed: %r", Status);
-        struct b2l_menu_view View = { 0, 0, 0, Msg, "Cannot read XNU payload. Press any key to return." };
+        AsciiSPrint(SubMsg, sizeof(SubMsg), "At: %a. Press key.", mErrorStage);
+        struct b2l_menu_view View = { 0, 0, 0, Msg, SubMsg };
         b2l_menu_render(mPixels, RenderW, RenderW, H, &View);
         volatile UINT32 *Fb = (volatile UINT32 *)(UINTN)mGop->Mode->FrameBufferBase;
         for (UINT32 y = 0; y < H; y++) {
             CopyMem((VOID *)(Fb + y * Stride), mPixels + y * RenderW, RenderW * 4);
         }
     }
-    Print(L"\r\nBoot failed: %r. The messages above say where.\r\n", Status);
+    Print(L"\r\nBoot failed: %r (Stage: %a)\r\n", Status, mErrorStage);
     if (mGop && mGop->Mode && mGop->Mode->Info) {
         Print(L"GOP: %ux%u Scan=%u FB=0x%lx\r\n",
             mGop->Mode->Info->HorizontalResolution,
