@@ -340,6 +340,7 @@ EFI_STATUS B2lLoadBootPayload(VOID **Kernel, UINTN *KernelSize, UINT8 Seed[B2L_B
   B2lSetErrorStage("Probing RAM for XNU");
   Status = B2lTryLoadFromRam(Kernel, KernelSize, Seed, WifiMac);
   if (!EFI_ERROR(Status)) {
+    mBootUfsLun = 0; // Default to UFS LUN 0 (sda) where GPT partitions (system, userdata) live
     return EFI_SUCCESS;
   }
 
