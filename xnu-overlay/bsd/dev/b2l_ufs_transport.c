@@ -121,28 +121,105 @@ static int wait_run_bit(uint32_t offset,uint32_t expected)
 }
 static int takeover(void)
 {
-    uint32_t cap=native_read(NULL,0),hce=native_read(NULL,0x34),hcs=native_read(NULL,0x30);
-    uint64_t list=host.dma_pa+B2L_UFS_UTRL_OFFSET;
-    uint64_t task=host.dma_pa+B2L_UFS_UTMR_OFFSET;
-    if(!(cap&(1U<<24)) || !(hce&1) || (hcs&7)!=7) {
-        printf("B2L UFS: inherited host unavailable CAP=0x%x HCE=0x%x HCS=0x%x\n",cap,hce,hcs);
+    uint32_t cap = native_read(NULL, 0);
+    uint32_t hce = native_read(NULL, 0x34);
+    uint32_t hcs = native_read(NULL, 0x30);
+    uint64_t list = host.dma_pa + B2L_UFS_UTRL_OFFSET;
+    uint64_t task = host.dma_pa + B2L_UFS_UTMR_OFFSET;
+
+    printf("B2L UFS: probe CAP=0x%x HCE=0x%x HCS=0x%x VS0=0x%x VS4=0x%x VS60=0x%x\n",
+        cap, hce, hcs, vs_read(0), vs_read(4), vs_read(0x60));
+
+    /* Enable Host Controller if not running */
+    if (!(hce & 1)) {
+        printf("B2L UFS: enabling controller...\n");
+        native_write(NULL, 0x34, 1);
+        uint64_t start = mach_absolute_time();
+        while (!(native_read(NULL, 0x34) & 1)) {
+            if (mach_absolute_time() - start >= host.io.timeout_ticks) {
+                printf("B2L UFS: HCE enable timeout HCE=0x%x\n", native_read(NULL, 0x34));
+                return ETIMEDOUT;
+            }
+            delay(10);
+        }
+        hce = native_read(NULL, 0x34);
+        hcs = native_read(NULL, 0x30);
+    }
+
+    /* Wait for Device Present (HCS bit 0) */
+    if (!(hcs & 1)) {
+        printf("B2L UFS: waiting for device present...\n");
+        uint64_t start = mach_absolute_time();
+        while (!(native_read(NULL, 0x30) & 1)) {
+            if (mach_absolute_time() - start >= host.io.timeout_ticks) {
+                printf("B2L UFS: device not present timeout HCS=0x%x\n", native_read(NULL, 0x30));
+                return ENODEV;
+            }
+            delay(10);
+        }
+        hcs = native_read(NULL, 0x30);
+    }
+
+    /* Verify 64-bit DMA capability if address exceeds 4 GiB */
+    if ((list >> 32) != 0 && !(cap & (1U << 24))) {
+        printf("B2L UFS: 64-bit DMA required but not supported CAP=0x%x\n", cap);
         return ENXIO;
     }
-    if(native_read(NULL,0x58) || native_read(NULL,0x78))return EBUSY;
-    /* These public vendor settings were established by the working EFI UFS
-     * driver. Refuse a different descriptor contract instead of guessing. */
-    if(vs_read(0)!=12 || vs_read(4)!=12 || vs_read(0x60)!=0xA)return ENOTSUP;
-    native_write(NULL,0x24,0); /* Disable controller interrupts, poll completion. */
-    native_write(NULL,0x60,0);native_write(NULL,0x80,0);
-    if(wait_run_bit(0x60,0) || wait_run_bit(0x80,0))return ETIMEDOUT;
-    bzero((void *)host.dma,B2L_UFS_DMA_SIZE);native_sync(NULL,0);
-    native_write(NULL,0x50,(uint32_t)list);native_write(NULL,0x54,(uint32_t)(list>>32));
-    native_write(NULL,0x70,(uint32_t)task);native_write(NULL,0x74,(uint32_t)(task>>32));
-    native_write(NULL,0x60,1); /* Task management remains stopped; never used. */
-    if(wait_run_bit(0x60,1))return ETIMEDOUT;
-    if(native_read(NULL,0x50)!=(uint32_t)list || native_read(NULL,0x54)!=(uint32_t)(list>>32) ||
-        !(native_read(NULL,0x60)&1) || native_read(NULL,0x70)!=(uint32_t)task ||
-        native_read(NULL,0x74)!=(uint32_t)(task>>32))return EIO;
+
+    /* Establish Samsung byte-granular descriptor configuration */
+    if (vs_read(0) != 12 || vs_read(4) != 12 || vs_read(0x60) != 0xA) {
+        printf("B2L UFS: setting vendor regs (was 0x%x 0x%x 0x%x)\n",
+            vs_read(0), vs_read(4), vs_read(0x60));
+        vs_write(0, 12);
+        vs_write(4, 12);
+        vs_write(0x60, 0xA);
+    }
+
+    /* Wait for any in-flight doorbells to clear */
+    uint64_t start = mach_absolute_time();
+    while (native_read(NULL, 0x58) || native_read(NULL, 0x78)) {
+        if (mach_absolute_time() - start >= host.io.timeout_ticks) {
+            printf("B2L UFS: doorbells busy UTRLDBR=0x%x UTMRDBR=0x%x\n",
+                native_read(NULL, 0x58), native_read(NULL, 0x78));
+            return EBUSY;
+        }
+        delay(10);
+    }
+
+    /* Disable interrupts and stop list processing */
+    native_write(NULL, 0x24, 0);
+    native_write(NULL, 0x60, 0);
+    native_write(NULL, 0x80, 0);
+    if (wait_run_bit(0x60, 0) || wait_run_bit(0x80, 0)) {
+        printf("B2L UFS: list stop timeout 0x60=0x%x 0x80=0x%x\n",
+            native_read(NULL, 0x60), native_read(NULL, 0x80));
+        return ETIMEDOUT;
+    }
+
+    /* Initialize DMA memory and point controller to new lists */
+    bzero((void *)host.dma, B2L_UFS_DMA_SIZE);
+    native_sync(NULL, 0);
+    native_write(NULL, 0x50, (uint32_t)list);
+    native_write(NULL, 0x54, (uint32_t)(list >> 32));
+    native_write(NULL, 0x70, (uint32_t)task);
+    native_write(NULL, 0x74, (uint32_t)(task >> 32));
+    native_write(NULL, 0x60, 1); /* Start UTRL; Task management remains stopped */
+    if (wait_run_bit(0x60, 1)) {
+        printf("B2L UFS: list start timeout 0x60=0x%x\n", native_read(NULL, 0x60));
+        return ETIMEDOUT;
+    }
+
+    /* Verify register state */
+    if (native_read(NULL, 0x50) != (uint32_t)list ||
+        native_read(NULL, 0x54) != (uint32_t)(list >> 32) ||
+        !(native_read(NULL, 0x60) & 1) ||
+        native_read(NULL, 0x70) != (uint32_t)task ||
+        native_read(NULL, 0x74) != (uint32_t)(task >> 32)) {
+        printf("B2L UFS: DMA register readback failed\n");
+        return EIO;
+    }
+
+    printf("B2L UFS: takeover successful! UTRLRSR=1 HCS=0x%x\n", native_read(NULL, 0x30));
     return 0;
 }
 int b2l_ufs_transport_init(struct b2l_ufs_geometry *out)

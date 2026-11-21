@@ -42,15 +42,53 @@ b2l_newline(void)
 	b2l_clear_row(b2l_row + 1 < b2l_rows ? b2l_row + 1 : b2l_panic_floor);
 }
 
+static volatile unsigned b2l_console_owner = 0;
+static volatile unsigned b2l_console_depth = 0;
+
+static void
+b2l_console_acquire(void)
+{
+	unsigned cpu = b2l_console_cpu();
+	if (__atomic_load_n(&b2l_console_owner, __ATOMIC_ACQUIRE) == cpu) {
+		b2l_console_depth++;
+		return;
+	}
+	while (1) {
+		unsigned expected = 0;
+		if (__atomic_compare_exchange_n(&b2l_console_owner, &expected, cpu, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+			b2l_console_depth = 1;
+			return;
+		}
+#if defined(__arm64__) || defined(__aarch64__)
+		__builtin_arm_yield();
+#endif
+	}
+}
+
+static void
+b2l_console_release(void)
+{
+	unsigned cpu = b2l_console_cpu();
+	if (__atomic_load_n(&b2l_console_owner, __ATOMIC_ACQUIRE) == cpu) {
+		if (--b2l_console_depth == 0) {
+			__atomic_store_n(&b2l_console_owner, 0, __ATOMIC_RELEASE);
+		}
+	}
+}
+
 void
 b2l_early_putc(char c)
 {
 	unsigned owner = __atomic_load_n(&b2l_panic_owner, __ATOMIC_ACQUIRE);
 	if (owner && owner != b2l_console_cpu()) return;
+	b2l_console_acquire();
 	b2l_log_append(c);
-	if (!b2l_active || (__atomic_load_n(&b2l_gui,__ATOMIC_ACQUIRE) && !owner)) return;
-	if (c == '\r') { b2l_col = 0; return; }
-	if (c == '\n') { b2l_newline(); return; }
+	if (!b2l_active || (__atomic_load_n(&b2l_gui,__ATOMIC_ACQUIRE) && !owner)) {
+		b2l_console_release();
+		return;
+	}
+	if (c == '\r') { b2l_col = 0; b2l_console_release(); return; }
+	if (c == '\n') { b2l_newline(); b2l_console_release(); return; }
 	if (b2l_col >= b2l_cols) b2l_newline();
 	const unsigned char *glyph = iso_font + (unsigned char)c * 16;
 	for (unsigned gy = 0; gy < 16; ++gy) {
@@ -65,6 +103,7 @@ b2l_early_putc(char c)
 		}
 	}
 	++b2l_col;
+	b2l_console_release();
 }
 
 static void b2l_string(const char *s) { while (*s) b2l_early_putc(*s++); }
@@ -74,11 +113,13 @@ void
 b2l_early_trace(const char *fmt, ...)
 {
 	if (!b2l_active) return;
+	b2l_console_acquire();
 	va_list args;
 	va_start(args, fmt);
 	_doprnt(fmt, &args, b2l_early_putc, 16);
 	va_end(args);
 	__asm__ volatile("dsb sy" ::: "memory");
+	b2l_console_release();
 }
 
 
