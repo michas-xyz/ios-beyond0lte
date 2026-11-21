@@ -336,16 +336,33 @@ EFI_STATUS B2lLoadBootPayload(VOID **Kernel, UINTN *KernelSize, UINT8 Seed[B2L_B
   *KernelSize = 0;
   mBootUfsLun = MAX_UINT32;
 
+  // Connect all controllers first so UfsDxe and PartitionDxe bind to UFS host hardware
+  B2lConnectAll();
+
+  // Probe connected BlockIo handles to detect the boot UFS LUN
+  EFI_HANDLE *BlockHandles = NULL;
+  UINTN BlockCount = 0;
+  if (!EFI_ERROR(gBS->LocateHandleBuffer(ByProtocol, &gEfiBlockIoProtocolGuid, NULL, &BlockCount, &BlockHandles))) {
+    for (UINTN i = 0; i < BlockCount; i++) {
+      EFI_DEVICE_PATH_PROTOCOL *Path;
+      if (!EFI_ERROR(gBS->HandleProtocol(BlockHandles[i], &gEfiDevicePathProtocolGuid, (VOID **)&Path))) {
+        UINT32 Lun;
+        if (b2l_boot_ufs_lun(Path, GetDevicePathSize(Path), &Lun) == 0) {
+          mBootUfsLun = Lun;
+          break;
+        }
+      }
+    }
+    FreePool(BlockHandles);
+  }
+  if (mBootUfsLun > 7) mBootUfsLun = 0; // Default to LUN 0 (sda) where GPT partitions live
+
   // First try loading XNU payload directly from physical RAM if staged by S-Boot
   B2lSetErrorStage("Probing RAM for XNU");
   Status = B2lTryLoadFromRam(Kernel, KernelSize, Seed, WifiMac);
   if (!EFI_ERROR(Status)) {
-    mBootUfsLun = 0; // Default to UFS LUN 0 (sda) where GPT partitions (system, userdata) live
     return EFI_SUCCESS;
   }
-
-  // Connect all controllers so UfsDxe and PartitionDxe bind to UFS host hardware
-  B2lConnectAll();
 
   // Allocate 64 KiB bounce buffer below 4 GiB for safe 32-bit DMA alignment
   EFI_PHYSICAL_ADDRESS BounceAddress = 0xFFFFFFFF;
