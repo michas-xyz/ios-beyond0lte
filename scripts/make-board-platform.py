@@ -110,6 +110,13 @@ def main():
         if path.name == 'B2LGoster.c':
             new = new.replace('UINT32                 Parca;', 'UINT32                 Parca __attribute__((unused));')
             new = new.replace('Parca++;', '// Parca++;')
+        if path.name == 'MemoryMapLib.c':
+            if '{"GPA Alive",' not in text and '{"PMU",' in text:
+                new = new.replace(
+                    '  {"PMU",                0x15860000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},',
+                    '  {"GPA Alive",          0x15850000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},\n'
+                    '  {"PMU",                0x15860000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE},'
+                )
         if path.name == 'KeypadDeviceLib.c':
             old_gpio_loop = (
                 '  if (mGpioProtocol == NULL) {\n'

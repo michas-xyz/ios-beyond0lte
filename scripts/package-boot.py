@@ -135,8 +135,8 @@ def check_boot(path):
         raise ValueError("missing Android BOOT header")
     kernel_size, _, ramdisk_size, _, second_size = struct.unpack_from("<5I", data, 8)
     page, version = struct.unpack_from("<2I", data, 36)
-    if page != PAGE or version != 1 or ramdisk_size or second_size:
-        raise ValueError("expected Android v1, 2048-byte pages and empty ramdisk/second")
+    if page != PAGE or version != 1 or second_size:
+        raise ValueError("expected Android v1, 2048-byte pages and empty second")
     if struct.unpack_from("<I", data, 1644)[0] != 1648:
         raise ValueError("incorrect Android v1 header_size")
     trailer = PAGE + align(kernel_size)
@@ -147,14 +147,14 @@ def check_boot(path):
         raise ValueError("legacy BOOT trailer provides only 64 seed bytes; repackage v2 with 256 seed bytes")
     if (magic, payload_version, header_size, offset) != (MAGIC, PAYLOAD_VERSION, HEADER_SIZE, HEADER_SIZE):
         raise ValueError("invalid BOOT trailer header")
-    if size < 4096 or size > 128 * 1024 * 1024 or trailer + offset + size != len(data):
+    if size < 4096 or size > 128 * 1024 * 1024 or trailer + offset + size > len(data):
         raise ValueError("invalid BOOT trailer size")
     wifi_present = check_wifi_metadata(data[trailer + 288:trailer + 320])
     macho = trailer + offset
     if struct.unpack_from("<III", data, macho) != (0xfeedfacf, 0x0100000c, 0):
         raise ValueError("XNU must be a thin, plain ARM64 Mach-O image")
     return {"android_kernel_bytes": kernel_size, "trailer_file_offset": trailer,
-            "xnu_bytes": size, "boot_bytes": len(data), "ramdisk_bytes": 0,
+            "xnu_bytes": size, "boot_bytes": len(data), "ramdisk_bytes": ramdisk_size,
             "payload_version": PAYLOAD_VERSION, "seed_bytes": SEED_SIZE,
             "wifi_mac_present": wifi_present}
 
@@ -210,27 +210,24 @@ def main():
         p.error("unexpected BootShim layout")
     android_kernel = intermediates / "uefi-kernel.bin"
     android_kernel.write_bytes(shim + fd + dtb)
-    empty_ramdisk = intermediates / "empty-ramdisk"
-    empty_ramdisk.write_bytes(b"")
+    wifi_mac = read_wifi_mac(a.wifi_mac_file) if a.wifi_mac_file else None
+    header = make_payload_header(len(kernel), wifi_mac)
+    payload_ramdisk = intermediates / "payload-ramdisk.bin"
+    payload_ramdisk.write_bytes(header + kernel)
+
     image = a.output_dir / "boot.img"
     subprocess.run([sys.executable, str(a.mu / "Resources/Scripts/mkbootimg.py"),
-                    "--kernel", str(android_kernel), "--ramdisk", str(empty_ramdisk),
+                    "--kernel", str(android_kernel), "--ramdisk", str(payload_ramdisk),
                     "--header_version", "1", "--pagesize", str(PAGE), "--board", board,
                     "--output", str(image)], check=True)
     boot = image.read_bytes()
-    expected_trailer = PAGE + align(len(shim) + len(fd) + len(dtb))
-    if len(boot) != expected_trailer:
+    expected_size = PAGE + align(len(shim) + len(fd) + len(dtb)) + align(len(header) + len(kernel))
+    if len(boot) != expected_size:
         p.error("unexpected Android BOOT component padding")
-    wifi_mac = read_wifi_mac(a.wifi_mac_file) if a.wifi_mac_file else None
-    header = make_payload_header(len(kernel), wifi_mac)
-    final_size = len(boot) + len(header) + len(kernel)
     limit = min(a.max_image_bytes, a.boot_partition_bytes or a.max_image_bytes)
-    if final_size > limit:
+    if len(boot) > limit:
         image.unlink()
-        p.error(f"BOOT image needs {final_size} bytes, above explicit ceiling {limit}")
-    with image.open("ab") as out:
-        out.write(header)
-        out.write(kernel)
+        p.error(f"BOOT image needs {len(boot)} bytes, above explicit ceiling {limit}")
     layout = check_boot(image)
     manifest = {
         "format": "beyond2lte-xnu-boot-v2", "device": board, "model": b2l_board.model(board),
@@ -242,9 +239,9 @@ def main():
         "firmware_sha256": sha256(a.firmware), "loader_sha256": sha256(a.loader),
         "embedded_loader_verified": True,
         "storage_writes_performed": False,
-        "boot_path": "Samsung S-Boot -> BootShim -> external Mu UEFI -> embedded XnuLoader -> BOOT trailer Mach-O",
-        "notes": ["Android ramdisk and second fields are empty; S-Boot does not load the XNU trailer.",
-                  "Firmware UFS/BlockIo reads the trailer from the BOOT partition.",
+        "boot_path": "Samsung S-Boot -> BootShim -> external Mu UEFI -> embedded XnuLoader -> RAM/BOOT payload Mach-O",
+        "notes": ["Android ramdisk holds the XNU payload so S-Boot stages it into physical RAM.",
+                  "Firmware XnuLoader discovers and loads the payload directly from RAM or UFS.",
                   "The host seed changes per packaged image, not per reboot; firmware RNG is preferred.",
                   "Verify actual device identity and BOOT capacity, and obtain approval before writing."]}
     (a.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

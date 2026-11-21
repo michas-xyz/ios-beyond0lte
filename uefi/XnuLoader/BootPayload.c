@@ -276,8 +276,7 @@ STATIC EFI_STATUS B2lTryLoadFromRam(
     EFI_MEMORY_DESCRIPTOR *Desc = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)MemMap + i * DescSize);
     if (Desc->Type != EfiConventionalMemory &&
         Desc->Type != EfiLoaderData &&
-        Desc->Type != EfiBootServicesData &&
-        Desc->Type != EfiReservedMemoryType) {
+        Desc->Type != EfiBootServicesData) {
       continue;
     }
 
@@ -285,7 +284,7 @@ STATIC EFI_STATUS B2lTryLoadFromRam(
     UINT64 RegionSize = Desc->NumberOfPages * 4096;
     if (RegionSize < PAYLOAD_HEADER_SIZE + 4096) continue;
 
-    for (UINT64 Off = 0; Off + PAYLOAD_HEADER_SIZE + 4096 <= RegionSize; Off += 2048) {
+    for (UINT64 Off = 0; Off + PAYLOAD_HEADER_SIZE + 4096 <= RegionSize; Off += 512) {
       UINT8 *Candidate = (UINT8 *)(UINTN)(Base + Off);
       if (CompareMem(Candidate, "B2LXNU02", 8) != 0) continue;
 
