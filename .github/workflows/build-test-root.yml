@@ -20,13 +20,14 @@ jobs:
           cat << 'EOF' > launchd_test.s
           .text
           .globl _start
-          .align 2
+          .p2align 2
 
           _start:
               // write(1, msg, len)
               mov x0, #1
               adr x1, msg
-              mov x2, #(msg_end - msg)
+              adr x2, msg_end
+              sub x2, x2, x1
               mov x16, #4
               svc #0x80
 
@@ -46,28 +47,37 @@ jobs:
 
               b loop
 
+          .p2align 3
+          timespec:
+              .quad 2
+              .quad 0
+
+          dot:
+              .ascii "."
+
+          .p2align 2
           msg:
               .ascii "\n"
               .ascii "========================================================\n"
               .ascii "*** B2L: HELLO FROM USERSPACE (PID 1) ON GALAXY S10e! ***\n"
               .ascii "========================================================\n\n"
           msg_end:
-
-          dot:
-              .ascii "."
-
-          .align 3
-          timespec:
-              .quad 2
-              .quad 0
           EOF
 
-          # Compile pure standalone ARM64 Mach-O executable
-          clang -target arm64-apple-macos -nostdlib -Wl,-e,_start launchd_test.s -o build-root/sbin/launchd
+          # Assemble object file
+          clang -target arm64-apple-macos -c launchd_test.s -o launchd_test.o
+
+          # Link standalone Mach-O executable
+          ld -arch arm64 -static -e _start launchd_test.o -o build-root/sbin/launchd || \
+          ld -arch arm64 -ld_classic -static -e _start launchd_test.o -o build-root/sbin/launchd || \
+          clang -target arm64-apple-macos -nostdlib -static -Wl,-e,_start launchd_test.o -o build-root/sbin/launchd || \
+          clang -target arm64-apple-macos -nostdlib -Wl,-e,_start launchd_test.o -o build-root/sbin/launchd
+
           codesign --force --sign - build-root/sbin/launchd || true
           chmod 755 build-root/sbin/launchd
           ls -la build-root/sbin/launchd
           file build-root/sbin/launchd
+          otool -l build-root/sbin/launchd || true
 
       - name: Create Case-sensitive Journaled HFS+ Image
         run: |
