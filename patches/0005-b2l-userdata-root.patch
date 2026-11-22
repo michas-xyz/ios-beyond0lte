@@ -28,10 +28,18 @@ index bb77c35..4a44d6b 100644
  
  	IOSecureBSDRoot(rootdevice);
 diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
-index e3b02cc..e914bcf 100644
+index e3b02cc..2bf1887 100644
 --- a/iokit/bsddev/IOKitBSDInit.cpp
 +++ b/iokit/bsddev/IOKitBSDInit.cpp
-@@ -711,11 +711,13 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
+@@ -67,6 +67,7 @@ extern dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys);
+ extern dev_t mdevlookup(int devid);
+ #if defined(ARM64_BOARD_CONFIG_B2L)
+ extern "C" int b2l_ufs_root_device(dev_t *);
++extern "C" void b2l_early_trace(const char *fmt, ...);
+ #endif
+ extern void mdevremoveall(void);
+ extern int mdevgetrange(int devid, uint64_t *base, uint64_t *size);
+@@ -711,11 +712,13 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
  	assert(matching);
  	matching->setObject(gIOResourceMatchedKey, gIOBSDKey);
  
@@ -45,7 +53,7 @@ index e3b02cc..e914bcf 100644
  	matching->release();
  	matching = NULL;
  
-@@ -803,21 +805,24 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
+@@ -803,21 +806,23 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
  //
  
  #if defined(ARM64_BOARD_CONFIG_B2L)
@@ -69,7 +77,6 @@ index e3b02cc..e914bcf 100644
  		*root = nativeRoot;
  		*oflags = 0;
 -		IOLog("BSD root: %s, major %d, minor %d (native HFS SYSTEM)\n",
-+		extern "C" void b2l_early_trace(const char *fmt, ...);
 +		b2l_early_trace("B2L ROOT: bound %s (dev=0x%x)\n", rootName, (unsigned)*root);
 +		IOLog("BSD root: %s, major %d, minor %d (native HFS root)\n",
  		    rootName, major(*root), minor(*root));
