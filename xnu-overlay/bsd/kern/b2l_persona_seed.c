@@ -95,18 +95,29 @@ static int publish_seed(vnode_t vp,vfs_context_t ctx)
 out:lookup_done(&nd);return error;
 }
 #ifndef B2L_PERSONA_HOST_TEST
+#include <arm64/b2l_early.h>
 #include "b2l_userspace_seed.h"
 #endif
 void b2l_persona_before_init(void)
 {
 #ifndef B2L_PERSONA_HOST_TEST
+    b2l_early_trace("B2L PERSONA: before_init begin\n");
     b2l_userspace_before_init();
+    b2l_early_trace("B2L PERSONA: b2l_userspace_before_init returned\n");
 #endif
     if(!b2l_amfi_active()||!rootvnode||vfs_isrdonly(vnode_mount(rootvnode))||
-       strcmp(vfs_statfs(vnode_mount(rootvnode))->f_fstypename,"hfs"))return;
+       strcmp(vfs_statfs(vnode_mount(rootvnode))->f_fstypename,"hfs")){
+#ifndef B2L_PERSONA_HOST_TEST
+        b2l_early_trace("B2L PERSONA: skipped (amfi=%d root=%d)\n", b2l_amfi_active(), rootvnode != NULL);
+#endif
+        return;
+    }
     vfs_context_t ctx=vfs_context_current();vnode_t vp=NULL;
     int error=vnode_lookup(manifest_path,VNODE_LOOKUP_NOFOLLOW_ANY,&vp,ctx);
     if(!error){
+#ifndef B2L_PERSONA_HOST_TEST
+        b2l_early_trace("B2L PERSONA: existing manifest preserved\n");
+#endif
         printf("B2L PERSONA: existing manifest preserved (regular=%d)\n",root_type(vp,VREG));
         vnode_put(vp);return;
     }
@@ -122,5 +133,8 @@ void b2l_persona_before_init(void)
     if(!error)error=VFS_SYNC(vnode_mount(rootvnode),MNT_WAIT,ctx);
     if(!error)printf("B2L PERSONA: initial v1 manifest published after journal replay\n");
 out:
+#ifndef B2L_PERSONA_HOST_TEST
+    b2l_early_trace("B2L PERSONA: before_init done (error=%d)\n", error);
+#endif
     if(error)printf("B2L PERSONA: initialization error=%d; existing data preserved\n",error);
 }

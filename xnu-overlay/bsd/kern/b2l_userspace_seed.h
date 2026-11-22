@@ -234,8 +234,13 @@ static void b2l_wifi_fetch(void)
 }
 static void b2l_userspace_before_init(void)
 {
+    b2l_early_trace("B2L USERSPACE: before_init begin\n");
     int requested=0;PE_parse_boot_argn("b2l_userspace_bootstrap",&requested,sizeof(requested));
-    if(requested!=1||!b2l_amfi_active()||!rootvnode||vfs_isrdonly(vnode_mount(rootvnode))||strcmp(vfs_statfs(vnode_mount(rootvnode))->f_fstypename,"hfs"))return;
+    if(requested!=1||!b2l_amfi_active()||!rootvnode||vfs_isrdonly(vnode_mount(rootvnode))||strcmp(vfs_statfs(vnode_mount(rootvnode))->f_fstypename,"hfs")){
+        b2l_early_trace("B2L USERSPACE: skipped (requested=%d amfi=%d)\n", requested, b2l_amfi_active());
+        return;
+    }
+    b2l_early_trace("B2L USERSPACE: running bootstrap tasks...\n");
     vfs_context_t ctx=vfs_context_current();int error=b2l_profile_cache_refresh(ctx);
     printf("B2L PROFILE: MobileGestalt refresh error=%d\n",error);
     {
@@ -252,7 +257,7 @@ static void b2l_userspace_before_init(void)
     b2l_bt_fetch();
     b2l_kbd_dictation_patch(ctx);   /* B1L-0164 */
     if(b2l_apps_layout(ctx)){
-        printf("B2L APPS: system-app layout active; installer launcher not published\n");
+        b2l_early_trace("B2L APPS: system-app layout active\n");
         return;
     }
     error=0;
@@ -265,5 +270,7 @@ static void b2l_userspace_before_init(void)
     error=b2l_apps_publish("/private/var/db/b2l-launchd-bootstrap-v5.plist","/private/var/db/.b2l-launchd-bootstrap-v5",b2l_apps_launch_cache,sizeof(b2l_apps_launch_cache),0644,ctx);
     if(!error)error=VFS_SYNC(vnode_mount(rootvnode),MNT_WAIT,ctx);
     if(!error)b2l_apps_cache_ready=1;
-out:printf("B2L APPS: native migration bootstrap publication error=%d\n",error);
+out:
+    b2l_early_trace("B2L APPS: bootstrap publication error=%d\n", error);
+    printf("B2L APPS: native migration bootstrap publication error=%d\n",error);
 }

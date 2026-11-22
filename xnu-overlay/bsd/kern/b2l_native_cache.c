@@ -319,21 +319,40 @@ static void worker(void*arg,wait_result_t why __unused){
 }
 void b2l_native_cache_before_init(void){
  b2l_early_trace("B2L NCACHE: before_init starting...\n");
- if(!enabled()||!storage_ready){printf("B2L NCACHE: unavailable; emulation retained\n");return;}
+ if(!enabled()||!storage_ready){
+  b2l_early_trace("B2L NCACHE: unavailable (en=%d sr=%d); emulation retained\n", enabled(), storage_ready);
+  return;
+ }
  DTEntry dt;const void*prop;unsigned n;uint64_t range[2];
- if(SecureDTLookupEntry(NULL,"/chosen",&dt)!=kSuccess||SecureDTGetProperty(dt,"b2l,native-cache",&prop,&n)!=kSuccess||n!=16)return;
+ if(SecureDTLookupEntry(NULL,"/chosen",&dt)!=kSuccess||SecureDTGetProperty(dt,"b2l,native-cache",&prop,&n)!=kSuccess||n!=16){
+  b2l_early_trace("B2L NCACHE: DT property missing\n");
+  return;
+ }
  memcpy(range,prop,16);boot_args*args=(boot_args*)PE_state.bootArgs;
- uint64_t base=range[0];if(range[1]<B2L_NC_HEADER||(base&4095)||base<args->physBase||base>args->topOfKernelData||range[1]>args->topOfKernelData-base)return;
+ uint64_t base=range[0];if(range[1]<B2L_NC_HEADER||(base&4095)||base<args->physBase||base>args->topOfKernelData||range[1]>args->topOfKernelData-base){
+  b2l_early_trace("B2L NCACHE: invalid staged range\n");
+  return;
+ }
  const uint8_t*staged=(const uint8_t*)ml_static_ptovirt(base);
- if(!staged||b2l_ncs_open(&store,&cache_io,root_identity)||memcmp(staged,store.headers,B2L_NC_HEADER))return;
+ if(!staged||b2l_ncs_open(&store,&cache_io,root_identity)||memcmp(staged,store.headers,B2L_NC_HEADER)){
+  b2l_early_trace("B2L NCACHE: open or header mismatch\n");
+  return;
+ }
  /* Only an index and a bounded hot window occupy RAM, regardless of disk size.
   * Reject an unreasonable index allocation before any root-file write. */
- if(store.slots>0x20000000u)return;
+ if(store.slots>0x20000000u){
+  b2l_early_trace("B2L NCACHE: excessive slots %u\n", store.slots);
+  return;
+ }
  uint32_t buckets=1;while(buckets<(uint64_t)store.slots*2)buckets<<=1;
  size_t key_bytes=(size_t)store.slots*sizeof(*store.keys),bucket_bytes=(size_t)buckets*sizeof(uint32_t);
- if(key_bytes>128u*1024u*1024u||bucket_bytes>128u*1024u*1024u-key_bytes)return;
+ if(key_bytes>128u*1024u*1024u||bucket_bytes>128u*1024u*1024u-key_bytes){
+  b2l_early_trace("B2L NCACHE: key/bucket bytes excessive\n");
+  return;
+ }
  store.keys=kalloc_data(key_bytes,Z_WAITOK|Z_ZERO);store.buckets=kalloc_data(bucket_bytes,Z_WAITOK|Z_ZERO);
  if(!store.keys||!store.buckets){
+  b2l_early_trace("B2L NCACHE: kalloc_data failed\n");
   if(store.keys)kfree_data(store.keys,key_bytes);if(store.buckets)kfree_data(store.buckets,bucket_bytes);return;
  }
  store.bucket_count=buckets;store.hot=hot_cells;store.tags=hot_tags;store.hot_count=HOT_CELLS;
@@ -342,21 +361,27 @@ void b2l_native_cache_before_init(void){
  for(unsigned i=0;i<store.used;i++){
   const uint8_t*r=NULL;
   if(b2l_ncs_read(&store,i,&r)||(r&&b2l_ncs_index(&store,i,r))){
-   printf("B2L NCACHE: invalid/duplicate disk record; emulation retained\n");
+   b2l_early_trace("B2L NCACHE: invalid/duplicate disk record; emulation retained\n");
    kfree_data(store.keys,key_bytes);kfree_data(store.buckets,bucket_bytes);return;
   }
  }
- printf("B2L NCACHE: disk=%llu MiB slots=%u used=%u hot=%u KiB index=%llu KiB; disk-backed records\n",
-  cache_io.bytes/(1024*1024),store.slots,store.used,(unsigned)(sizeof(hot_cells)/1024),(uint64_t)(key_bytes+bucket_bytes)/1024);
+ b2l_early_trace("B2L NCACHE: disk=%llu MiB slots=%u used=%u\n",
+  cache_io.bytes/(1024*1024),store.slots,store.used);
  /* Resolve the measured module before applying any native bytes. Failure is
   * explicit: never guess an exclusion or continue into a known dirty module. */
  int restore=0;(void)PE_parse_boot_argn("b2l_cache_restore",&restore,sizeof(restore));
- if(restore!=1&&integrity_open())panic("B2L native cache: corecrypto image metadata unavailable");
+ if(restore!=1&&integrity_open()){
+  b2l_early_trace("B2L NCACHE: corecrypto image unavailable; emulation retained\n");
+  kfree_data(store.keys,key_bytes);kfree_data(store.buckets,bucket_bytes);return;
+ }
  int recycle=1;(void)PE_parse_boot_argn("b2l_cache_reclaim",&recycle,sizeof(recycle));
  int archive_error=undo_open(restore!=1&&recycle==1);
  if(archive_error){
   undo_close();reclaim_disabled=1;
-  if(restore==1&&archive_error!=ENOENT)panic("B2L native cache: undo archive invalid; restore incomplete");
+  if(restore==1&&archive_error!=ENOENT){
+   b2l_early_trace("B2L NCACHE: undo archive invalid\n");
+   kfree_data(store.keys,key_bytes);kfree_data(store.buckets,bucket_bytes);return;
+  }
   if(restore!=1)printf("B2L NCACHE: undo archive unavailable (%d); retaining SYSTEM records\n",archive_error);
  }
  if(b2l_nc_u32(store.headers+store.header_copy*4096+8)!=2)reclaim_disabled=1;
@@ -366,7 +391,10 @@ void b2l_native_cache_before_init(void){
  uint64_t purge_end;nanoseconds_to_absolutetime(60ull*NSEC_PER_SEC,&purge_end);purge_end+=mach_absolute_time();
  for(unsigned i=0;i<store.used;i++){
   if(!store.keys[i].inode)continue;const uint8_t*r=NULL,*target=NULL;
-  if(b2l_ncs_read(&store,i,&r)||!r)panic("B2L native cache: durable record read failed before apply");
+  if(b2l_ncs_read(&store,i,&r)||!r){
+   b2l_early_trace("B2L NCACHE: durable record read failed\n");
+   kfree_data(store.keys,key_bytes);kfree_data(store.buckets,bucket_bytes);return;
+  }
   if(apply_record(r,restore,&target)){
    if(restore!=1&&recycle==1&&!reclaim_disabled)reclaim_record(i,r,target);
   }else if(apply_stale&&restore!=1&&purge==1){
@@ -380,21 +408,22 @@ void b2l_native_cache_before_init(void){
    * order restores that chain all the way back to its original page. */
   for(uint64_t i=undo.count;i;i--){
    const uint8_t*target=NULL;
-   if(b2l_ncu_read(&undo,i-1,undo_record))panic("B2L native cache: durable undo read failed");
+   if(b2l_ncu_read(&undo,i-1,undo_record)){
+    b2l_early_trace("B2L NCACHE: durable undo read failed\n");
+    return;
+   }
    if(apply_record(undo_record,1,&target))undo_restored++;
   }
  }
  if(restore!=1&&(reclaimed||purged)&&b2l_nc_u32(store.headers+store.header_copy*4096+8)==2&&b2l_ncs_trim(&store,undo.next,verify)){
   failures++;reclaim_disabled=1;printf("B2L NCACHE: scan-range trim failed; learning disabled this boot\n");
  }
- printf("B2L NCACHE: reclaimed=%llu live=%u free=%u scan=%u undo=%llu undo_restored=%llu reclaim_disabled=%d\n",
-  reclaimed,store.live,store.slots-store.live,store.used,undo.count,undo_restored,reclaim_disabled);
+ b2l_early_trace("B2L NCACHE: pre-init %s applied=%llu already=%llu skipped=%llu\n",restore==1?"restore":"apply",applied,already,skipped);
  undo_close();
- printf("B2L NCACHE: pre-init %s applied=%llu already=%llu skipped=%llu; journal replay completed by HFS\n",restore==1?"restore":"apply",applied,already,skipped);
- printf("B2L NCACHE WHY: apply inode-gone=%llu mismatch=%llu\n",skip_why[8],skip_why[9]);
- printf("B2L NCACHE PURGE: stale records freed=%llu kept=%llu (60 s budget) used=%u live=%u\n",purged,purge_kept,store.used,store.live);
- printf("B2L NCACHE: corecrypto measured text original; excluded=%llu restored=%llu words; other translations retained\n",integrity_excluded,integrity_restored);
- if(restore==1||failures)return;
+ if(restore==1||failures){
+  b2l_early_trace("B2L NCACHE: restore/failures, exiting\n");
+  return;
+ }
  int count=CACHE_WORKERS;(void)PE_parse_boot_argn("b2l_cache_workers",&count,sizeof(count));
  if(count<1||count>(int)CACHE_WORKERS)count=CACHE_WORKERS;
  for(unsigned i=0;i<(unsigned)count;i++){
@@ -402,6 +431,5 @@ void b2l_native_cache_before_init(void){
   thread_deallocate(t);__atomic_add_fetch(&worker_count,1,__ATOMIC_RELEASE);
  }
  unsigned started=__atomic_load_n(&worker_count,__ATOMIC_ACQUIRE);
- if(started){__atomic_store_n(&ready,1,__ATOMIC_RELEASE);printf("B2L NCACHE: automatic learning enabled; workers=%u; serialized durable commit; original files change on next boot\n",started);}
- else printf("B2L NCACHE: no worker started; emulation retained\n");
+ b2l_early_trace("B2L NCACHE: before_init completed, workers=%u\n", started);
 }
