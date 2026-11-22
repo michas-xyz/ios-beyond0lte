@@ -2057,6 +2057,7 @@ index 504b3fa..d6438ff 100644
 +	    seed, nonce_nbytes, nonce, sizeof(personalization) - 1, personalization));
 +	b2l_getentropy = getentropy; b2l_getentropy_arg = getentropy_arg;
 +	b2l_max_ngens = max_ngens;
++	for (unsigned i = 0; i < MAX_CPUS; ++i) b2l_generators[i] = true;
 +}
 +static void
 +b2l_prng_init(struct cckprng_ctx *ctx, size_t seed_nbytes, const void *seed,
@@ -2065,12 +2066,11 @@ index 504b3fa..d6438ff 100644
 +	b2l_prng_init_with_getentropy(ctx, MAX_CPUS, seed_nbytes, seed,
 +	    nonce_nbytes, nonce, getentropy, arg);
 +}
-+static void b2l_prng_initgen(struct cckprng_ctx *ctx __unused, unsigned index)
++static void b2l_prng_initgen(struct cckprng_ctx *ctx __unused, unsigned index __unused)
 +{
-+	lck_mtx_lock(&b2l_prng_lock);
-+	assert(index < b2l_max_ngens && !b2l_generators[index]);
-+	b2l_generators[index] = true;
-+	lck_mtx_unlock(&b2l_prng_lock);
++	(void)ctx;
++	(void)index;
++	/* All generator slots pre-initialized; lockless during CPU reg */
 +}
 +static void b2l_prng_reseed(struct cckprng_ctx *ctx, size_t size, const void *seed)
 +{
