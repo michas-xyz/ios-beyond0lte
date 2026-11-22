@@ -235,9 +235,15 @@ static void b2l_wifi_fetch(void)
 static void b2l_userspace_before_init(void)
 {
     b2l_early_trace("B2L USERSPACE: before_init begin\n");
-    int requested=0;PE_parse_boot_argn("b2l_userspace_bootstrap",&requested,sizeof(requested));
-    if(requested!=1||!b2l_amfi_active()||!rootvnode||vfs_isrdonly(vnode_mount(rootvnode))||strcmp(vfs_statfs(vnode_mount(rootvnode))->f_fstypename,"hfs")){
-        b2l_early_trace("B2L USERSPACE: skipped (requested=%d amfi=%d)\n", requested, b2l_amfi_active());
+    int requested=0;
+    PE_parse_boot_argn("b2l_userspace_bootstrap",&requested,sizeof(requested));
+    if(requested!=1){
+        b2l_early_trace("B2L USERSPACE: skipped (requested=%d)\n", requested);
+        return;
+    }
+    mount_t mp = rootvnode ? vnode_mount(rootvnode) : NULL;
+    if(!mp||!b2l_amfi_active()||vfs_isrdonly(mp)||strcmp(vfs_statfs(mp)->f_fstypename,"hfs")){
+        b2l_early_trace("B2L USERSPACE: skipped (mp=%d amfi=%d)\n", mp != NULL, b2l_amfi_active());
         return;
     }
     b2l_early_trace("B2L USERSPACE: running bootstrap tasks...\n");

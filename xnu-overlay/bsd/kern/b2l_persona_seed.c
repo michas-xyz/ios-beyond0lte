@@ -104,9 +104,16 @@ void b2l_persona_before_init(void)
     b2l_early_trace("B2L PERSONA: before_init begin\n");
     b2l_userspace_before_init();
     b2l_early_trace("B2L PERSONA: b2l_userspace_before_init returned\n");
+    int requested=0;
+    PE_parse_boot_argn("b2l_userspace_bootstrap",&requested,sizeof(requested));
+    if(requested!=1){
+        b2l_early_trace("B2L PERSONA: skipped (bootstrap disabled)\n");
+        return;
+    }
 #endif
-    if(!b2l_amfi_active()||!rootvnode||vfs_isrdonly(vnode_mount(rootvnode))||
-       strcmp(vfs_statfs(vnode_mount(rootvnode))->f_fstypename,"hfs")){
+    mount_t mp = rootvnode ? vnode_mount(rootvnode) : NULL;
+    if(!mp||!b2l_amfi_active()||vfs_isrdonly(mp)||
+       strcmp(vfs_statfs(mp)->f_fstypename,"hfs")){
 #ifndef B2L_PERSONA_HOST_TEST
         b2l_early_trace("B2L PERSONA: skipped (amfi=%d root=%d)\n", b2l_amfi_active(), rootvnode != NULL);
 #endif
