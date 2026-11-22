@@ -22,6 +22,7 @@ extern struct vnodeopv_desc hfs_specop_opv_desc;
 extern struct vnodeopv_desc hfs_fifoop_opv_desc;
 extern const struct vfsops hfs_vfsops;
 extern int b2l_ufs_root_device(dev_t *);
+extern void b2l_early_trace(const char *fmt, ...);
 static vfstable_t b2l_hfs_vfs_handle;
 static struct vfsops b2l_hfs_vfsops;
 
@@ -30,13 +31,18 @@ b2l_hfs_mount(mount_t mp, vnode_t devvp, user_addr_t data, vfs_context_t context
 {
 	dev_t selected;
 	int rw = 0;
+	b2l_early_trace("B2L HFS: mount called dev=0x%x flags=0x%llx\n",
+	    devvp ? (unsigned)vnode_specrdev(devvp) : 0, (unsigned long long)vfs_flags(mp));
 	if ((vfs_flags(mp) & MNT_ROOTFS) && devvp &&
 	    !b2l_ufs_root_device(&selected) && vnode_specrdev(devvp) == selected &&
 	    PE_parse_boot_argn("b2l_root_rw", &rw, sizeof(rw)) && rw == 1) {
 		vfs_clearflags(mp, MNT_RDONLY);
 	}
 	int error = hfs_vfsops.vfs_mount(mp, devvp, data, context);
+	b2l_early_trace("B2L HFS: mount result=%d\n", error);
 	if (!error && (vfs_flags(mp) & MNT_ROOTFS)) {
+		b2l_early_trace("B2L HFS: native root mounted %s\n",
+		    vfs_isrdonly(mp) ? "read-only" : "read-write");
 		printf("B2L HFS: native root mounted %s (unencrypted)\n",
 		    vfs_isrdonly(mp) ? "read-only" : "read-write");
 	}

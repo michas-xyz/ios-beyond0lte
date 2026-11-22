@@ -1,6 +1,51 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index bb77c35..4a44d6b 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -897,7 +897,14 @@ bsd_init(void)
+ #endif
+ 
+ 		bsd_init_kprintf("vfs_mountroot\n");
++#if defined(ARM64_BOARD_CONFIG_B2L)
++		extern void b2l_early_trace(const char *, ...);
++		b2l_early_trace("B2L ROOT: calling vfs_mountroot...\n");
++#endif
+ 		if (0 == (err = vfs_mountroot())) {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++			b2l_early_trace("B2L ROOT: vfs_mountroot succeeded!\n");
++#endif
+ 			break;
+ 		}
+ 		rootdevice[0] = '\0';
+@@ -915,6 +922,9 @@ bsd_init(void)
+ 		}
+ #endif
+ 		printf("cannot mount root, errno = %d\n", err);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++		b2l_early_trace("B2L ROOT: vfs_mountroot failed errno=%d\n", err);
++#endif
+ 	}
+ 
+ 	IOSecureBSDRoot(rootdevice);
+diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
+index e3b02cc..e914bcf 100644
 --- a/iokit/bsddev/IOKitBSDInit.cpp
 +++ b/iokit/bsddev/IOKitBSDInit.cpp
-@@ -803,21 +803,22 @@
+@@ -711,11 +711,13 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
+ 	assert(matching);
+ 	matching->setObject(gIOResourceMatchedKey, gIOBSDKey);
+ 
++#if !defined(ARM64_BOARD_CONFIG_B2L)
+ 	if ((service = IOService::waitForMatchingService(matching, 30ULL * kSecondScale))) {
+ 		OSSafeReleaseNULL(service);
+ 	} else {
+ 		IOLog("!BSD\n");
+ 	}
++#endif
+ 	matching->release();
+ 	matching = NULL;
+ 
+@@ -803,21 +805,24 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
  //
  
  #if defined(ARM64_BOARD_CONFIG_B2L)
@@ -24,11 +69,13 @@
  		*root = nativeRoot;
  		*oflags = 0;
 -		IOLog("BSD root: %s, major %d, minor %d (native HFS SYSTEM)\n",
++		extern "C" void b2l_early_trace(const char *fmt, ...);
++		b2l_early_trace("B2L ROOT: bound %s (dev=0x%x)\n", rootName, (unsigned)*root);
 +		IOLog("BSD root: %s, major %d, minor %d (native HFS root)\n",
  		    rootName, major(*root), minor(*root));
  		goto iofrootx;
  	}
-@@ -1044,6 +1045,10 @@
+@@ -1065,6 +1070,10 @@ IORamDiskBSDRoot(void)
  void
  IOSecureBSDRoot(const char * rootName)
  {

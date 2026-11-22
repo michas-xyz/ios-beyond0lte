@@ -318,6 +318,7 @@ static void worker(void*arg,wait_result_t why __unused){
  }
 }
 void b2l_native_cache_before_init(void){
+ b2l_early_trace("B2L NCACHE: before_init starting...\n");
  if(!enabled()||!storage_ready){printf("B2L NCACHE: unavailable; emulation retained\n");return;}
  DTEntry dt;const void*prop;unsigned n;uint64_t range[2];
  if(SecureDTLookupEntry(NULL,"/chosen",&dt)!=kSuccess||SecureDTGetProperty(dt,"b2l,native-cache",&prop,&n)!=kSuccess||n!=16)return;
