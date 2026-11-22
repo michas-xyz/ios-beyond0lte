@@ -43,10 +43,10 @@ index 60d8aa6..36996c1 100644
  bsd/pthread/pthread_workqueue.c		standard
  
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
-index ffe7ce0..fa5497d 100644
+index ffe7ce0..7287bab 100644
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -1113,6 +1113,12 @@ bsd_autoconf(void)
+@@ -1112,6 +1112,11 @@ bsdinit_task(void)
  kern_return_t
  bsd_autoconf(void)
  {
