@@ -13,11 +13,11 @@
  	 * Actually load the image file we previously decided to load.
  	 */
 +#if defined(ARM64_BOARD_CONFIG_B2L)
-+	if (proc_getpid(p) == 1) b2l_early_trace("B2L EXEC: load_machfile begin\n");
++	if (proc_getpid(current_proc()) == 1) b2l_early_trace("B2L EXEC: load_machfile begin\n");
 +#endif
  	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
 +#if defined(ARM64_BOARD_CONFIG_B2L)
-+	if (proc_getpid(p) == 1) b2l_early_trace("B2L EXEC: load_machfile result=%d entry=0x%llx\n", lret, (uint64_t)load_result.entry_point);
++	if (proc_getpid(current_proc()) == 1) b2l_early_trace("B2L EXEC: load_machfile result=%d entry=0x%llx\n", lret, (uint64_t)load_result.entry_point);
 +#endif
  	if (lret != LOAD_SUCCESS) {
  		error = load_return_to_errno(lret);
@@ -27,11 +27,11 @@
  	 */
  	if (error == 0) {
 +#if defined(ARM64_BOARD_CONFIG_B2L)
-+		if (proc_getpid(p) == 1) b2l_early_trace("B2L EXEC: process_signature begin\n");
++		if (proc_getpid(current_proc()) == 1) b2l_early_trace("B2L EXEC: process_signature begin\n");
 +#endif
  		error = process_signature(p, imgp);
 +#if defined(ARM64_BOARD_CONFIG_B2L)
-+		if (proc_getpid(p) == 1) b2l_early_trace("B2L EXEC: process_signature result=%d\n", error);
++		if (proc_getpid(current_proc()) == 1) b2l_early_trace("B2L EXEC: process_signature result=%d\n", error);
 +#endif
  
  		/*
@@ -41,11 +41,11 @@
  		 */
  		ipc_task_enable(new_task);
 +#if defined(ARM64_BOARD_CONFIG_B2L)
-+		if (proc_getpid(p) == 1) b2l_early_trace("B2L EXEC: process_signature begin\n");
++		if (proc_getpid(current_proc()) == 1) b2l_early_trace("B2L EXEC: process_signature begin\n");
 +#endif
  		error = process_signature(p, imgp);
 +#if defined(ARM64_BOARD_CONFIG_B2L)
-+		if (proc_getpid(p) == 1) b2l_early_trace("B2L EXEC: process_signature result=%d\n", error);
++		if (proc_getpid(current_proc()) == 1) b2l_early_trace("B2L EXEC: process_signature result=%d\n", error);
 +#endif
  	}
  
@@ -83,7 +83,7 @@
  	}
  
 +#if defined(ARM64_BOARD_CONFIG_B2L)
-+	if (proc_getpid(p) == 1) b2l_early_trace("B2L EXEC: parse %s depth=%d result=%d entry=0x%llx\n", vp->v_name, depth, ret, (uint64_t)result->entry_point);
++	if (proc_getpid(current_proc()) == 1) b2l_early_trace("B2L EXEC: parse %s depth=%d result=%d entry=0x%llx\n", vp->v_name, depth, ret, (uint64_t)result->entry_point);
 +#endif
  	if (ret == LOAD_BADMACHO && found_xhdr) {
  		ret = LOAD_BADMACHO_UPX;
