@@ -59,19 +59,19 @@ static int to_errno(int error)
     default:return EIO;
     }
 }
-static int command(const uint8_t cdb[16],uint32_t bytes,const void *data_out)
+static int command_lun(uint8_t lun,const uint8_t cdb[16],uint32_t bytes,const void *data_out)
 {
     struct b2l_ufs_utrd *tr=(void *)(host.dma+B2L_UFS_UTRL_OFFSET);
     struct b2l_ufs_ucd *ucd=(void *)(host.dma+B2L_UFS_UCD_OFFSET);
     int error;
     if(host.poisoned)return B2L_UFS_IO_ERROR;
     error=b2l_ufs_build_command(tr,ucd,host.dma_pa+B2L_UFS_UCD_OFFSET,
-        host.dma_pa+B2L_UFS_DATA_OFFSET,(uint8_t)host.geometry.lun,0,cdb,bytes,data_out!=NULL);
+        host.dma_pa+B2L_UFS_DATA_OFFSET,lun,0,cdb,bytes,data_out!=NULL);
     if(error)return error;
     if(data_out)memcpy((void *)(host.dma+B2L_UFS_DATA_OFFSET),data_out,bytes);
     else b2l_ufs_zero((void *)(host.dma+B2L_UFS_DATA_OFFSET),bytes);
     vs_write(0x40,0xffffffffU); /* SCSI nexus, preserving existing vendor format. */
-    error=b2l_ufs_execute(&host.io,tr,ucd,(uint8_t)host.geometry.lun,0);
+    error=b2l_ufs_execute(&host.io,tr,ucd,lun,0);
     if(error) {
         if(error!=B2L_UFS_SCSI_ERROR) {
             uint32_t status=native_read(NULL,0x20);
@@ -79,16 +79,30 @@ static int command(const uint8_t cdb[16],uint32_t bytes,const void *data_out)
              * pinned and prohibit all later commands instead of reusing it. */
             if(native_read(NULL,0x58)!=0 || (status&B2L_UFS_FATAL))host.poisoned=1;
         }
-        printf("B2L UFS: command 0x%x result error=%d OCS=0x%x response=0x%x status=0x%x\n",
-            cdb[0],error,tr->dword[2],ucd->response[6],ucd->response[7]);
+        printf("B2L UFS: lun 0x%x command 0x%x result error=%d OCS=0x%x response=0x%x status=0x%x\n",
+            lun,cdb[0],error,tr->dword[2],ucd->response[6],ucd->response[7]);
     }
     return error;
+}
+static int command(const uint8_t cdb[16],uint32_t bytes,const void *data_out)
+{
+    return command_lun((uint8_t)host.geometry.lun,cdb,bytes,data_out);
 }
 static int geometry(void)
 {
     uint8_t cdb[16]={0};
     uint8_t *data=(void *)(host.dma+B2L_UFS_DATA_OFFSET);
     int error;
+
+    /* Issue INQUIRY to identify target LUN */
+    bzero(cdb,sizeof(cdb));cdb[0]=0x12;cdb[4]=36;
+    if(!command(cdb,36,NULL)) {
+        char vid[9]={0},pid[17]={0},rev[5]={0};
+        memcpy(vid,data+8,8);memcpy(pid,data+16,16);memcpy(rev,data+32,4);
+        printf("B2L UFS: target LUN %u inquiry: [%s] [%s] rev [%s]\n",
+            host.geometry.lun,vid,pid,rev);
+    }
+
     /* A previous boot environment can leave a pending UNIT ATTENTION or require
      * START STOP UNIT to transition from stopped/standby to active. */
     for(unsigned retry=0;retry<30;retry++) {
@@ -105,12 +119,36 @@ static int geometry(void)
             printf("B2L UFS: sense key=0x%x asc=0x%x ascq=0x%x\n", key, asc, ascq);
             if(key == 2 && asc == 4 && ascq == 2) {
                 /* 02/04/02: LOGICAL UNIT NOT READY, INITIALIZING COMMAND REQUIRED */
-                printf("B2L UFS: issuing START STOP UNIT (START=1) to activate LUN...\n");
+                /* Per JEDEC UFS spec & Linux ufshcd_set_dev_pwr_mode():
+                 * Send START STOP UNIT to Device W-LUN (0xD0) with UFS_ACTIVE_PWR_MODE (1 << 4 = 0x10). */
+                printf("B2L UFS: activating device via W-LUN 0xD0 (Active power mode 0x10)...\n");
                 bzero(cdb, sizeof(cdb));
                 cdb[0] = 0x1b; // START STOP UNIT
-                cdb[4] = 0x01; // START = 1
-                int start_err = command(cdb, 0, NULL);
-                printf("B2L UFS: START STOP UNIT result=%d\n", start_err);
+                cdb[4] = 0x10; // UFS_ACTIVE_PWR_MODE << 4
+                int start_err = command_lun(0xd0, cdb, 0, NULL);
+                printf("B2L UFS: W-LUN 0xD0 SSU result=%d\n", start_err);
+                if (start_err) {
+                    /* Read sense for W-LUN 0xD0 */
+                    bzero(cdb, sizeof(cdb)); cdb[0] = 3; cdb[4] = 18;
+                    if (!command_lun(0xd0, cdb, 18, NULL))
+                        printf("B2L UFS: W-LUN sense key=0x%x asc=0x%x ascq=0x%x\n",
+                            data[2]&0xf, data[12], data[13]);
+                    
+                    /* Try with START bit (0x11) on W-LUN 0xD0 */
+                    bzero(cdb, sizeof(cdb)); cdb[0] = 0x1b; cdb[4] = 0x11;
+                    start_err = command_lun(0xd0, cdb, 0, NULL);
+                    printf("B2L UFS: W-LUN 0xD0 SSU(0x11) result=%d\n", start_err);
+                }
+                /* Also try START STOP UNIT on target LUN with 0x10 and 0x01 */
+                bzero(cdb, sizeof(cdb)); cdb[0] = 0x1b; cdb[4] = 0x10;
+                int lu_start = command(cdb, 0, NULL);
+                printf("B2L UFS: LU SSU(0x10) result=%d\n", lu_start);
+                if (lu_start) {
+                    bzero(cdb, sizeof(cdb)); cdb[0] = 3; cdb[4] = 18;
+                    if (!command(cdb, 18, NULL))
+                        printf("B2L UFS: LU SSU sense key=0x%x asc=0x%x ascq=0x%x\n",
+                            data[2]&0xf, data[12], data[13]);
+                }
                 delay(100000); // 100ms wait for media spinup
             } else if(key == 2 && asc == 4 && ascq == 1) {
                 /* 02/04/01: LOGICAL UNIT NOT READY, BECOMING READY */
