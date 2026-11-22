@@ -43,20 +43,21 @@ index 60d8aa6..36996c1 100644
  bsd/pthread/pthread_workqueue.c		standard
  
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
-index ffe7ce0..7287bab 100644
+index ffe7ce0..fa5497d 100644
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -1112,6 +1112,11 @@ bsdinit_task(void)
- kern_return_t
- bsd_autoconf(void)
- {
+@@ -1126,6 +1126,12 @@ bsd_autoconf(void)
+ 		}
+ 	}
+ 
 +#if defined(ARM64_BOARD_CONFIG_B2L)
 +	/* Native read-only UFS discovery; does not change root selection. */
 +	extern void b2l_ufs_disk_init(void);
 +	b2l_ufs_disk_init();
 +#endif
- 	kprintf("bsd_autoconf: calling kminit\n");
- 	kminit();
++
+ 	return IOKitBSDInit();
+ }
  
 diff --git a/bsd/kern/kern_trustcache.c b/bsd/kern/kern_trustcache.c
 index 4b1e8a9..c1de2cd 100644

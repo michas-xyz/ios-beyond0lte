@@ -23,6 +23,7 @@
 #include <arm64/b2l_persistent_log.h>
 #include "../kern/b2l_native_cache.h"
 #include "../kern/b2l_cache_core.h"
+extern void b2l_early_trace(const char *fmt, ...);
 
 struct b2l_ufs_view {
 	uint64_t base, size;
@@ -480,9 +481,11 @@ static void b2l_start_native_cache(void)
 void
 b2l_ufs_disk_init(void)
 {
+	b2l_early_trace("B2L UFS: b2l_ufs_disk_init begin\n");
 	struct b2l_ufs_geometry geometry;
 	int error = b2l_ufs_transport_init(&geometry);
 	if (error) {
+		b2l_early_trace("B2L UFS: transport unavailable error=%d; root search unchanged\n", error);
 		printf("B2L UFS: transport unavailable error=%d; root search unchanged\n", error);
 		return;
 	}
@@ -493,32 +496,42 @@ b2l_ufs_disk_init(void)
 	b2l_reader.write = b2l_ufs_transport_write;
 	uint64_t capacity;
 	if ((error = b2l_ufs_capacity(&b2l_reader, &capacity))) {
+		b2l_early_trace("B2L UFS: invalid geometry error=%d\n", error);
 		printf("B2L UFS: invalid geometry error=%d\n", error); return;
 	}
+	b2l_early_trace("B2L UFS: geometry blocks=%llu block-size=%u; read-only\n",
+	    geometry.block_count, geometry.block_size);
 	printf("B2L UFS: geometry blocks=%llu block-size=%u; read-only\n",
 	    geometry.block_count, geometry.block_size);
 	b2l_block_major = bdevsw_add(-1, &b2l_bdevsw);
 	if (b2l_block_major < 0) {
+		b2l_early_trace("B2L UFS: no block device slot\n");
 		printf("B2L UFS: no block device slot\n"); return;
 	}
 	b2l_char_major = cdevsw_add_with_bdev(-1, &b2l_cdevsw, b2l_block_major);
 	if (b2l_char_major < 0) {
 		bdevsw_remove(b2l_block_major, &b2l_bdevsw);
+		b2l_early_trace("B2L UFS: no character device slot\n");
 		printf("B2L UFS: no character device slot\n"); return;
 	}
 	if ((error = b2l_publish(0, 0, capacity))) {
 		cdevsw_remove(b2l_char_major, &b2l_cdevsw);
 		bdevsw_remove(b2l_block_major, &b2l_bdevsw);
+		b2l_early_trace("B2L UFS: device node failed error=%d\n", error);
 		printf("B2L UFS: device node failed error=%d\n", error); return;
 	}
+	b2l_early_trace("B2L UFS: /dev/b2lufs0 and /dev/rb2lufs0 ready (read-only)\n");
 	printf("B2L UFS: /dev/b2lufs0 and /dev/rb2lufs0 ready (read-only)\n");
 	lck_mtx_lock(&b2l_ufs_disk_lock);
 	error = b2l_gpt_read(&b2l_reader, &b2l_partitions);
 	lck_mtx_unlock(&b2l_ufs_disk_lock);
 	if (error) {
+		b2l_early_trace("B2L UFS: GPT validation failed error=%d; no partition nodes\n", error);
 		printf("B2L UFS: GPT validation failed error=%d; no partition nodes\n", error);
 		return;
 	}
+	b2l_early_trace("B2L UFS: primary+backup GPT CRC verified entries=%u partitions=%u\n",
+	    b2l_partitions.entry_count, b2l_partitions.partition_count);
 	printf("B2L UFS: primary+backup GPT CRC verified entries=%u partitions=%u\n",
 	    b2l_partitions.entry_count, b2l_partitions.partition_count);
 	lck_mtx_lock(&b2l_ufs_disk_lock);
@@ -530,7 +543,11 @@ b2l_ufs_disk_init(void)
 		const struct b2l_gpt_partition *p = &b2l_partitions.partitions[i];
 		error = b2l_publish(p->index, p->first_lba * geometry.block_size,
 		    p->block_count * geometry.block_size);
-		if (error) printf("B2L UFS: partition node p%u failed error=%d\n", p->index, error);
+		if (error) {
+			b2l_early_trace("B2L UFS: partition node p%u failed error=%d\n", p->index, error);
+			printf("B2L UFS: partition node p%u failed error=%d\n", p->index, error);
+		}
 	}
+	b2l_early_trace("B2L UFS: native BSD devices ready; root=%d\n", b2l_root_index);
 	printf("B2L UFS: native BSD devices ready; only the selected validated HFS partition can be a writable root\n");
 }

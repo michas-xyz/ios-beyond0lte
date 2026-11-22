@@ -399,6 +399,7 @@ extern "C" int64_t b2l_pmic_rtc_seconds(void)
 static void b2l_measure_all(const char *when, processor_t const procs[MAX_CPUS])
 {
     for (unsigned cpu = 0; cpu < MAX_CPUS; ++cpu) {
+        if (!procs[cpu]) continue;
         processor_t previous = b2l_bind_cpu(procs[cpu]);
         thread_block(THREAD_CONTINUE_NULL);
         uint64_t khz = 0;
@@ -773,15 +774,23 @@ void B2LCPU::finishStartup(void *, wait_result_t)
 {
     if (cpu_number() != 0 || __atomic_load_n(&providers_ready, __ATOMIC_ACQUIRE) != MAX_CPUS)
         panic("B2L SMP: coordinator before complete CPU provider topology");
+
+    int smp_cpus = 2;
+    PE_parse_boot_argn("cpus", &smp_cpus, sizeof(smp_cpus));
+    PE_parse_boot_argn("b2l_cpus", &smp_cpus, sizeof(smp_cpus));
+    if (smp_cpus < 1) smp_cpus = 1;
+    if (smp_cpus > MAX_CPUS) smp_cpus = MAX_CPUS;
+    b2l_early_trace("B2L SMP: finishStartup active cores=%d (clamped from MAX_CPUS=%d)\n", smp_cpus, MAX_CPUS);
+
     /* Announce known topology, without claiming any secondary is online. */
-    ml_set_max_cpus(MAX_CPUS);
+    ml_set_max_cpus((unsigned)smp_cpus);
     prepareSecondaryPage();
-    for (unsigned id = 0; id < MAX_CPUS; ++id) {
+    for (unsigned id = 0; id < (unsigned)smp_cpus; ++id) {
         B2LCPU *c = __atomic_load_n(&b2l_cpus[id], __ATOMIC_ACQUIRE);
         if (!c) panic("B2L SMP: missing provider %u", id);
         c->registerProcessor();
         /* Do not overwrite the shared low-entry diagnostic or start the next
-         * M4 until this core has reached C and serviced its self-SGI. */
+         * core until this core has reached C and serviced its self-SGI. */
         if(id)waitForStartup(id);
     }
     uint64_t deadline, last_stage[MAX_CPUS];
@@ -789,15 +798,15 @@ void B2LCPU::finishStartup(void *, wait_result_t)
     nanoseconds_to_deadline(20 * NSEC_PER_SEC, &deadline);
     for (;;) {
         if (b2l_smp_rejected()) panic("B2L SMP: unexpected secondary affinity rejected before CPU-data lookup");
-        for (unsigned i = 1; i < MAX_CPUS; ++i) {
+        for (unsigned i = 1; i < (unsigned)smp_cpus; ++i) {
             uint64_t stage = b2l_smp_progress(i);
             if (stage != last_stage[i]) {
                 b2l_early_trace("B2L SMP: CPU%u secondary-stage=%llu\n", i, stage);
                 last_stage[i] = stage;
             }
         }
-        bool ready = __atomic_load_n(&registered_cpus, __ATOMIC_ACQUIRE) == MAX_CPUS;
-        for (unsigned i = 0; ready && i < MAX_CPUS; ++i) {
+        bool ready = __atomic_load_n(&registered_cpus, __ATOMIC_ACQUIRE) == (unsigned)smp_cpus;
+        for (unsigned i = 0; ready && i < (unsigned)smp_cpus; ++i) {
             B2LCPU *c = __atomic_load_n(&b2l_cpus[i], __ATOMIC_ACQUIRE);
             ready = c && __atomic_load_n(&c->cpuInitialized, __ATOMIC_ACQUIRE) &&
                 b2l_cpu_ipi_ready(i);
@@ -809,7 +818,7 @@ void B2LCPU::finishStartup(void *, wait_result_t)
     }
     /* Real timers on every CPU, plus CPU0 -> each secondary and each -> CPU0.
      * Only one xcall is outstanding; reset its acknowledgement before send. */
-    for (unsigned sender = 0; sender < MAX_CPUS; ++sender) {
+    for (unsigned sender = 0; sender < (unsigned)smp_cpus; ++sender) {
         processor_t previous = b2l_bind_cpu(b2l_cpus[sender]->machProcessor);
         thread_block(THREAD_CONTINUE_NULL);
         if ((unsigned)cpu_number() != sender) panic("B2L CPU: IPI proof thread not bound");
@@ -819,7 +828,7 @@ void B2LCPU::finishStartup(void *, wait_result_t)
             if (mach_absolute_time() > deadline) panic("B2L CPU: per-CPU timer proof timeout");
             IOSleep(1);
         }
-        unsigned first = sender ? 0 : 1, end = sender ? 1 : MAX_CPUS;
+        unsigned first = sender ? 0 : 1, end = sender ? 1 : (unsigned)smp_cpus;
         for (unsigned target = first; target < end; ++target) {
             __atomic_store_n(&xcall_observed[target], 0, __ATOMIC_RELEASE);
             kern_return_t kr = cpu_xcall((int)target, (broadcastFunc)xcall_proof,
@@ -843,11 +852,12 @@ void B2LCPU::finishStartup(void *, wait_result_t)
     ml_cpu_init_completed();
     b2l_cpus[0]->cpusRunning();
     IOService::publishResource(gIOAllCPUInitializedKey, kOSBooleanTrue);
-    b2l_early_trace("B2L CPU: 8/8 CPUs initialized, per-CPU timer and bidirectional SGI1 verified\n");
-    IOLog("B2L CPU: 8/8 CPUs initialized, per-CPU timer and bidirectional SGI1 verified\n");
+    b2l_early_trace("B2L CPU: %u/%u CPUs initialized, per-CPU timer and bidirectional SGI1 verified\n", smp_cpus, smp_cpus);
+    IOLog("B2L CPU: %u/%u CPUs initialized, per-CPU timer and bidirectional SGI1 verified\n", smp_cpus, smp_cpus);
     {
         processor_t procs[MAX_CPUS];
-        for (unsigned i = 0; i < MAX_CPUS; ++i) procs[i] = b2l_cpus[i]->machProcessor;
+        for (unsigned i = 0; i < (unsigned)smp_cpus; ++i) procs[i] = b2l_cpus[i]->machProcessor;
+        for (unsigned i = (unsigned)smp_cpus; i < MAX_CPUS; ++i) procs[i] = nullptr;
         b2l_dvfs_start(procs);
         b2l_gpu_probe();
         b2l_audio_probe();
