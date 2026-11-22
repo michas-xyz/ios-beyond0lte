@@ -23,7 +23,53 @@ jobs:
           .p2align 2
 
           _start:
-              // write(1, msg, len)
+              // Syscall test: getpid (SYS_getpid = 20)
+              mov x16, #20
+              svc #0x80
+
+              // Try open("/dev/console", O_WRONLY = 1)
+              adr x0, dev_console
+              mov x1, #1
+              mov x2, #0
+              mov x16, #5
+              svc #0x80
+              b.cc 1f
+
+              // Fallback: try open("/dev/console", O_RDWR = 2)
+              adr x0, dev_console
+              mov x1, #2
+              mov x2, #0
+              mov x16, #5
+              svc #0x80
+              b.cc 1f
+
+              // Fallback: use fd 1 directly
+              mov x0, #1
+
+          1:
+              mov x19, x0           // save console fd
+
+              // dup2(console_fd, 1) -> stdout
+              mov x0, x19
+              mov x1, #1
+              mov x16, #90
+              svc #0x80
+
+              // dup2(console_fd, 2) -> stderr
+              mov x0, x19
+              mov x1, #2
+              mov x16, #90
+              svc #0x80
+
+              // Write banner to console fd
+              mov x0, x19
+              adr x1, msg
+              adr x2, msg_end
+              sub x2, x2, x1
+              mov x16, #4
+              svc #0x80
+
+              // Also write banner to fd 1
               mov x0, #1
               adr x1, msg
               adr x2, msg_end
@@ -32,13 +78,20 @@ jobs:
               svc #0x80
 
           loop:
-              // nanosleep(timespec, 0)
-              adr x0, timespec
-              mov x1, #0
-              mov x16, #340
+              // Busy delay loop (~0.1s at ~2.7 GHz)
+              mov x20, #0x8000000
+          delay:
+              subs x20, x20, #1
+              b.ne delay
+
+              // Print dot to console fd
+              mov x0, x19
+              adr x1, dot
+              mov x2, #1
+              mov x16, #4
               svc #0x80
 
-              // write(1, dot, 1)
+              // Print dot to fd 1
               mov x0, #1
               adr x1, dot
               mov x2, #1
@@ -47,10 +100,9 @@ jobs:
 
               b loop
 
-          .p2align 3
-          timespec:
-              .quad 2
-              .quad 0
+          .p2align 2
+          dev_console:
+              .asciz "/dev/console"
 
           dot:
               .ascii "."
@@ -92,6 +144,8 @@ jobs:
 
           # Populate required directories
           sudo mkdir -p "$MNT/sbin" "$MNT/bin" "$MNT/usr/bin" "$MNT/dev" "$MNT/private/var/log" "$MNT/private/etc"
+          sudo mknod "$MNT/dev/console" c 0 0 || true
+          sudo chmod 666 "$MNT/dev/console" || true
           sudo cp build-root/sbin/launchd "$MNT/sbin/launchd"
           sudo chmod 755 "$MNT/sbin/launchd"
 
