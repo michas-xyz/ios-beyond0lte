@@ -1,6 +1,6 @@
 --- a/osfmk/kern/debug.c
 +++ b/osfmk/kern/debug.c
-@@ -733,15 +733,20 @@
+@@ -733,15 +733,17 @@
  
  #if defined(__arm64__) && (DEVELOPMENT || DEBUG)
  	if (!PE_arm_debug_and_trace_initialized()) {
@@ -24,10 +24,6 @@
 +			    db_message != NULL ? db_message : "Debugger entry (no message)");
 +		}
  		paniclog_append_noflush("%s\n", buf);
-+#if defined(B2L)
-+		extern void b2l_early_trace(const char *fmt, ...);
-+		b2l_early_trace("B2L PANIC: %s\n", buf);
-+#endif
  	}
  #endif
 @@ -965,6 +967,13 @@
@@ -37,7 +33,6 @@
 +
 +#if defined(B2L)
 +	/* Scalar-only, bounded diagnostics before debugger hooks can fault. */
-+	extern void b2l_early_trace(const char *fmt, ...);
 +	b2l_early_trace("B2L DEBUGGER: reason=%u caller=0x%lx context=%u options=0x%llx message=%.160s\n",
 +	    reason, debugger_caller, ctx != NULL, debugger_options_mask,
 +	    message != NULL ? message : "(null)");

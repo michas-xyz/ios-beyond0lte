@@ -16,14 +16,12 @@
 +b2l_persona_seed.o_CFLAGS_ADD += -mgeneral-regs-only
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -1119,6 +1119,10 @@
+@@ -1119,6 +1119,8 @@
  #if defined(B2L)
  	extern void b2l_native_cache_before_init(void);
  	b2l_native_cache_before_init();
 +	extern void b2l_persona_before_init(void);
 +	b2l_persona_before_init();
-+	extern void b2l_early_trace(const char *, ...);
-+	b2l_early_trace("B2L INIT: calling load_init_program\n");
  #endif
  	load_init_program(p);
  	lock_trace = 1;
