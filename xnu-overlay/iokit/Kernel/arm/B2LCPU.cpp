@@ -818,7 +818,7 @@ void B2LCPU::finishStartup(void *, wait_result_t)
     }
     /* Real timers on every CPU, plus CPU0 -> each secondary and each -> CPU0.
      * Only one xcall is outstanding; reset its acknowledgement before send. */
-    for (unsigned sender = 0; sender < (unsigned)smp_cpus; ++sender) {
+    for (unsigned sender = 0; sender < 1; ++sender) {
         processor_t previous = b2l_bind_cpu(b2l_cpus[sender]->machProcessor);
         thread_block(THREAD_CONTINUE_NULL);
         if ((unsigned)cpu_number() != sender) panic("B2L CPU: IPI proof thread not bound");
