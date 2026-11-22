@@ -205,8 +205,9 @@ b2l_early_panic(const char *fmt, va_list *args)
     unsigned expected = 0, owner = b2l_console_cpu();
     if (!__atomic_compare_exchange_n(&b2l_panic_owner, &expected, owner, 0,
             __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
-    b2l_row = b2l_col = 0;
-    for (unsigned row = 0; row < b2l_rows; ++row) b2l_clear_row(row);
+    b2l_newline();
+    b2l_string("========================================");
+    b2l_newline();
     b2l_early_trace("B2L FIRST PANIC: MPIDR=0x%x\n", owner - 1);
     {
         /* B1L-0038: the panicking CPU's own frames (frame-pointer chain), unslid, so that a photo can be symbolized */

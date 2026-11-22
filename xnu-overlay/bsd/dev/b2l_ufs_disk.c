@@ -361,6 +361,11 @@ b2l_ufs_root_device(dev_t *dev)
 	    b2l_views[b2l_root_index].ready && b2l_views[b2l_root_index].writable) {
 		*dev = makedev(b2l_block_major, b2l_root_index);
 		error = 0;
+	} else {
+		printf("B2L ROOT: bdev=%d root_idx=%u ready=%d writable=%d\n",
+		    b2l_block_major, b2l_root_index,
+		    b2l_root_index ? b2l_views[b2l_root_index].ready : 0,
+		    b2l_root_index ? b2l_views[b2l_root_index].writable : 0);
 	}
 	lck_mtx_unlock(&b2l_ufs_disk_lock);
 	return error;

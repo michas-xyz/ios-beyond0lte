@@ -91,11 +91,11 @@ static int geometry(void)
     int error;
     /* A previous boot environment can leave a pending UNIT ATTENTION or require
      * START STOP UNIT to transition from stopped/standby to active. */
-    for(unsigned retry=0;retry<10;retry++) {
+    for(unsigned retry=0;retry<30;retry++) {
         bzero(cdb,sizeof(cdb));error=command(cdb,0,NULL);
         if(!error)break;
         printf("B2L UFS: TUR not ready (retry %u), checking sense...\n", retry);
-        if(error!=B2L_UFS_SCSI_ERROR || retry==9)return to_errno(error);
+        if(error!=B2L_UFS_SCSI_ERROR || retry==29)return to_errno(error);
         cdb[0]=3;cdb[4]=18;
         error=command(cdb,18,NULL);
         if(!error) {
@@ -111,10 +111,16 @@ static int geometry(void)
                 cdb[4] = 0x01; // START = 1
                 int start_err = command(cdb, 0, NULL);
                 printf("B2L UFS: START STOP UNIT result=%d\n", start_err);
-                delay(50000); // 50ms wait for media spinup
+                delay(100000); // 100ms wait for media spinup
             } else if(key == 2 && asc == 4 && ascq == 1) {
                 /* 02/04/01: LOGICAL UNIT NOT READY, BECOMING READY */
                 printf("B2L UFS: LUN becoming ready, waiting...\n");
+                delay(100000);
+            } else if(key == 6) {
+                /* 06/xx/xx: UNIT ATTENTION cleared by REQUEST SENSE */
+                printf("B2L UFS: UNIT ATTENTION cleared, retrying...\n");
+                delay(10000);
+            } else {
                 delay(50000);
             }
         }
