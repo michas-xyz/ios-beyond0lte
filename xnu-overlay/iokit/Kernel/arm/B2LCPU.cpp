@@ -157,7 +157,7 @@ bool B2LCPU::start(IOService *provider)
     OSNumber *logical = OSDynamicCast(OSNumber, provider->getProperty("logical-cpu-id"));
     OSData *reg = OSDynamicCast(OSData, provider->getProperty("reg"));
     if (!logical || !reg || reg->getLength() != sizeof(uint32_t) ||
-        top->num_cpus != MAX_CPUS || top->num_clusters != 3 || top->boot_cpu != &top->cpus[0] ||
+        top->num_cpus < 1 || top->num_cpus > MAX_CPUS || top->num_clusters != 3 || top->boot_cpu != &top->cpus[0] ||
         top->cpus[0].phys_id != 0 ||
         logical->unsigned32BitValue() >= MAX_CPUS) return false;
     unsigned id = logical->unsigned32BitValue();
@@ -852,6 +852,7 @@ void B2LCPU::finishStartup(void *, wait_result_t)
     ml_cpu_init_completed();
     b2l_cpus[0]->cpusRunning();
     IOService::publishResource(gIOAllCPUInitializedKey, kOSBooleanTrue);
+    IOService::publishResource("IOBSD");
     b2l_early_trace("B2L CPU: %u/%u CPUs initialized, per-CPU timer and bidirectional SGI1 verified\n", smp_cpus, smp_cpus);
     IOLog("B2L CPU: %u/%u CPUs initialized, per-CPU timer and bidirectional SGI1 verified\n", smp_cpus, smp_cpus);
     {
