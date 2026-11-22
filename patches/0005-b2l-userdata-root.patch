@@ -28,3 +28,14 @@
  		    rootName, major(*root), minor(*root));
  		goto iofrootx;
  	}
+@@ -1044,6 +1045,10 @@
+ void
+ IOSecureBSDRoot(const char * rootName)
+ {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	(void)rootName;
++	return;
++#endif
+ #if CONFIG_SECURE_BSD_ROOT
+ 	IOReturn         result;
+ 	IOPlatformExpert *pe;
