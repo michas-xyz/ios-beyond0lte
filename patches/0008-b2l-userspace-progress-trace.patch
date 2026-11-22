@@ -1,5 +1,5 @@
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index dc60fe8..9ee80c7 100644
+index dc60fe8..841d5fa 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -80,6 +80,7 @@
@@ -10,7 +10,41 @@ index dc60fe8..9ee80c7 100644
  #endif
  #include <machine/reg.h>
  #include <machine/cpu_capabilities.h>
-@@ -2078,7 +2079,13 @@ grade:
+@@ -1967,6 +1968,9 @@ exec_mach_imgact(struct image_params *imgp)
+ 		error = -1;
+ 		goto bad;
+ 	}
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L MACH: entry magic=0x%x ftype=0x%x cpu=0x%x\n", mach_header->magic, mach_header->filetype, mach_header->cputype);
++#endif
+ 
+ 	if (imgp->ip_origcputype != 0) {
+ 		/* Fat header previously had an idea about this thin file */
+@@ -2017,6 +2021,9 @@ exec_mach_imgact(struct image_params *imgp)
+ 		goto bad;
+ 	}
+ grade:
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L MACH: grade cputype=0x%x\n", imgp->ip_origcputype);
++#endif
+ 	if (!grade_binary(imgp->ip_origcputype, imgp->ip_origcpusubtype & ~CPU_SUBTYPE_MASK,
+ 	    imgp->ip_origcpusubtype & CPU_SUBTYPE_MASK, TRUE)) {
+ 		error = EBADARCH;
+@@ -2048,7 +2055,13 @@ grade:
+ #endif
+ 
+ 	/* Copy in arguments/environment from the old process */
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L MACH: strings\n");
++#endif
+ 	error = exec_extract_strings(imgp);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L MACH: strings ret=%d\n", error);
++#endif
+ 	if (error) {
+ 		goto bad;
+ 	}
+@@ -2078,7 +2091,13 @@ grade:
  	/*
  	 * Actually load the image file we previously decided to load.
  	 */
@@ -24,7 +58,73 @@ index dc60fe8..9ee80c7 100644
  	if (lret != LOAD_SUCCESS) {
  		error = load_return_to_errno(lret);
  
-@@ -5540,7 +5547,13 @@ bad:
+@@ -2984,6 +3003,9 @@ exec_activate_image(struct image_params *imgp)
+ 
+ 	/* Use excpath, which contains the copyin-ed exec path */
+ 	DTRACE_PROC1(exec, uintptr_t, excpath);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L ACTIVATE: start %s\n", excpath);
++#endif
+ 
+ 	ndp = kalloc_type(struct nameidata, Z_WAITOK | Z_ZERO | Z_NOFAIL);
+ 
+@@ -2992,6 +3014,9 @@ exec_activate_image(struct image_params *imgp)
+ 
+ again:
+ 	error = namei(ndp);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L ACTIVATE: namei ret=%d\n", error);
++#endif
+ 	if (error) {
+ 		if (error == ERESTART) {
+ 			error = EINTR;
+@@ -3014,8 +3039,14 @@ again:
+ 		proc_unlock(p);
+ 		goto bad_notrans;
+ 	}
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L ACTIVATE: transstart\n");
++#endif
+ 	error = proc_transstart(p, 1, 0);
+ 	proc_unlock(p);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L ACTIVATE: transstart ret=%d\n", error);
++#endif
+ 	if (error) {
+ 		goto bad_notrans;
+ 	}
+@@ -3031,10 +3062,16 @@ again:
+ 		*imgp->ip_origvattr = *imgp->ip_vattr;
+ 	}
+ 
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L ACTIVATE: vn_rdwr read\n");
++#endif
+ 	error = vn_rdwr(UIO_READ, imgp->ip_vp, imgp->ip_vdata, PAGE_SIZE, 0,
+ 	    UIO_SYSSPACE, IO_NODELOCKED,
+ 	    vfs_context_ucred(imgp->ip_vfs_context),
+ 	    &resid, vfs_context_proc(imgp->ip_vfs_context));
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L ACTIVATE: vn_rdwr ret=%d resid=%d\n", error, resid);
++#endif
+ 	if (error) {
+ 		goto bad;
+ 	}
+@@ -5414,7 +5451,13 @@ bad:
+ 		 * exec_activate_image because task_bank_init checks entitlements that
+ 		 * aren't loaded until subsequent calls (including exec_resettextvp).
+ 		 */
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L EXEC: second transstart\n");
++#endif
+ 		error = proc_transstart(p, 0, 0);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L EXEC: second transstart ret=%d\n", error);
++#endif
+ 
+ 		if (error == 0) {
+ 			task_bank_init(new_task);
+@@ -5540,7 +5583,13 @@ bad:
  	 * fire.
  	 */
  	if (error == 0) {
@@ -38,7 +138,21 @@ index dc60fe8..9ee80c7 100644
  
  		/*
  		 * Pay for our earlier safety; deliver the delayed signals from
-@@ -6192,7 +6205,13 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
+@@ -6132,7 +6181,13 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
+ 	 * Warning: If activation failed after point of no return, it returns error
+ 	 * as 0 and pretends the call succeeded.
+ 	 */
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L EXEC: calling exec_activate_image\n");
++#endif
+ 	error = exec_activate_image(imgp);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L EXEC: exec_activate_image ret=%d\n", error);
++#endif
+ 	/* thread and task ref returned for vfexec case */
+ 
+ 	if (imgp->ip_new_thread != NULL) {
+@@ -6192,7 +6247,13 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
  		 * Similarly, this must happen after resettextvp.
  		 */
  		ipc_task_enable(new_task);
@@ -52,7 +166,7 @@ index dc60fe8..9ee80c7 100644
  	}
  
  
-@@ -6359,6 +6378,9 @@ exit_with_error:
+@@ -6359,6 +6420,9 @@ exit_with_error:
  			}
  			/* wake up the new exec thread */
  			task_clear_return_wait(get_threadtask(imgp->ip_new_thread), clearwait_flags);
@@ -62,7 +176,7 @@ index dc60fe8..9ee80c7 100644
  			thread_deallocate(imgp->ip_new_thread);
  			imgp->ip_new_thread = NULL;
  		}
-@@ -8035,7 +8057,14 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
+@@ -8035,7 +8099,14 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
  	 */
  	set_security_token(p, proc_ucred_unsafe(p));
  
@@ -216,3 +330,27 @@ index ab34ab3..f3d49d9 100644
  	uint32_t iar = b2l_irq_ack();
  	unsigned intid = iar & 0x3ffU;
  	/* GICv2 reserves 1020..1023 as special/spurious acknowledgements. */
+diff --git a/osfmk/kern/task.c b/osfmk/kern/task.c
+index bac41b9..5a61039 100644
+--- a/osfmk/kern/task.c
++++ b/osfmk/kern/task.c
+@@ -108,6 +108,9 @@
+ 
+ #include <kern/kern_types.h>
+ #include <kern/mach_param.h>
++#if defined(ARM64_BOARD_CONFIG_B2L)
++#include <arm64/b2l_early.h>
++#endif
+ #include <kern/misc_protos.h>
+ #include <kern/task.h>
+ #include <kern/thread.h>
+@@ -1055,6 +1058,9 @@ task_wait_to_return(void)
+ 	}
+ #endif
+ 
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_early_trace("B2L BOOTSTRAP: task_wait_to_return -> EL0 entry!\n");
++#endif
+ 	thread_bootstrap_return();
+ }
+ 
