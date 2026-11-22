@@ -204,15 +204,4 @@ index b2aae03..ccf990f 100644
  	lck_mtx_assert(&cluster_powerdown_lock, LCK_MTX_ASSERT_OWNED);
  
  	if (pcs.pcs_init_completed) {
-@@ -9100,6 +9104,11 @@ sched_update_powered_cores_drops_lock(
- 	lck_mtx_assert(&cluster_powerdown_lock, LCK_MTX_ASSERT_OWNED);
- 	simple_lock_assert(&sched_available_cores_lock, LCK_ASSERT_OWNED);
- 
-+#if defined(ARM64_BOARD_CONFIG_B2L) || defined(B2L)
-+	(void)requested_reason;
-+	(void)caller_s;
-+	return threadq;
-+#endif
- 	assert(ml_get_interrupts_enabled() == false);
- 	assert(caller_s == true); /* Caller must have had interrupts enabled when they took the lock */
  
