@@ -189,3 +189,30 @@
  	for (int pset_id = 0; pset_id < sched_num_psets; pset_id++) {
  		processor_set_t pset = pset_for_id(pset_id);
  		if (sched_edge_stir_the_pot_core_type_is_desired(pset)) {
+diff --git a/osfmk/kern/sched_prim.c b/osfmk/kern/sched_prim.c
+index b2aae03..ccf990f 100644
+--- a/osfmk/kern/sched_prim.c
++++ b/osfmk/kern/sched_prim.c
+@@ -7824,6 +7824,10 @@ suspend_cluster_powerdown_locked(bool for_sleep)
+ static void
+ resume_cluster_powerdown_locked(bool for_sleep)
+ {
++#if defined(ARM64_BOARD_CONFIG_B2L) || defined(B2L)
++	(void)for_sleep;
++	return;
++#endif
+ 	lck_mtx_assert(&cluster_powerdown_lock, LCK_MTX_ASSERT_OWNED);
+ 
+ 	if (pcs.pcs_init_completed) {
+@@ -9100,6 +9104,11 @@ sched_update_powered_cores_drops_lock(
+ 	lck_mtx_assert(&cluster_powerdown_lock, LCK_MTX_ASSERT_OWNED);
+ 	simple_lock_assert(&sched_available_cores_lock, LCK_ASSERT_OWNED);
+ 
++#if defined(ARM64_BOARD_CONFIG_B2L) || defined(B2L)
++	(void)requested_reason;
++	(void)caller_s;
++	return threadq;
++#endif
+ 	assert(ml_get_interrupts_enabled() == false);
+ 	assert(caller_s == true); /* Caller must have had interrupts enabled when they took the lock */
+ 
