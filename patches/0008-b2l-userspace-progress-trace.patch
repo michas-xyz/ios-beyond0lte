@@ -2,12 +2,11 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 index dc60fe8..841d5fa 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -80,6 +80,8 @@
+@@ -80,6 +80,7 @@
   */
  #if defined(ARM64_BOARD_CONFIG_B2L)
  #include <arm64/b2l_arm64e_compat.h>
 +#include <arm64/b2l_early.h>
-+int b2l_exec_started = 0;
  #endif
  #include <machine/reg.h>
  #include <machine/cpu_capabilities.h>

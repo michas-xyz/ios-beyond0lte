@@ -21,6 +21,7 @@ static unsigned b2l_console_cpu(void)
     return (unsigned)(__builtin_arm_rsr64("MPIDR_EL1") & 0xffff) + 1;
 }
 extern void b2l_smp_dump(void);
+int b2l_exec_started = 0;
 
 static void
 b2l_clear_row(unsigned row)
