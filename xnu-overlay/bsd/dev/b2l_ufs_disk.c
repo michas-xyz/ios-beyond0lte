@@ -73,7 +73,8 @@ b2l_strategy(struct buf *bp)
 	int error = 0;
 	extern int b2l_exec_started;
 	if (b2l_exec_started) {
-		b2l_early_trace("B2L STRAT: bp=%p blk=%lld cnt=%u\n", bp, (int64_t)buf_blkno(bp), count);
+		b2l_early_trace("B2L STRAT: bp=%p cnt=%u\n", bp, count);
+		b2l_early_trace("B2L STRAT: blk=%lld\n", (int64_t)buf_blkno(bp));
 	}
 	buf_setresid(bp, count);
 	if (!v) {
@@ -105,7 +106,7 @@ b2l_strategy(struct buf *bp)
 					error = b2l_ufs_write_view(&b2l_reader, v->base, v->size,
 					    block * v->sector_size, count, data, &done);
 				}
-				if (b2l_exec_started) b2l_early_trace("B2L STRAT: view ret=%d done=%lu\n", error, (unsigned long)done);
+				if (b2l_exec_started) b2l_early_trace("B2L STRAT: view ret=%d done=%u\n", error, (unsigned)done);
 				buf_unmap(bp);
 				if (b2l_exec_started) b2l_early_trace("B2L STRAT: unmap done\n");
 			}
