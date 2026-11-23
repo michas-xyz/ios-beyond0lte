@@ -2,11 +2,12 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 index dc60fe8..841d5fa 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -80,6 +80,7 @@
+@@ -80,6 +80,8 @@
   */
  #if defined(ARM64_BOARD_CONFIG_B2L)
  #include <arm64/b2l_arm64e_compat.h>
 +#include <arm64/b2l_early.h>
++int b2l_exec_started = 0;
  #endif
  #include <machine/reg.h>
  #include <machine/cpu_capabilities.h>
@@ -58,11 +59,12 @@ index dc60fe8..841d5fa 100644
  	if (lret != LOAD_SUCCESS) {
  		error = load_return_to_errno(lret);
  
-@@ -2984,6 +3003,9 @@ exec_activate_image(struct image_params *imgp)
+@@ -2984,6 +3004,10 @@ exec_activate_image(struct image_params *imgp)
  
  	/* Use excpath, which contains the copyin-ed exec path */
  	DTRACE_PROC1(exec, uintptr_t, excpath);
 +#if defined(ARM64_BOARD_CONFIG_B2L)
++	b2l_exec_started = 1;
 +	b2l_early_trace("B2L ACTIVATE: start %s\n", excpath);
 +#endif
  
@@ -98,7 +100,7 @@ index dc60fe8..841d5fa 100644
  	}
  
 +#if defined(ARM64_BOARD_CONFIG_B2L)
-+	b2l_early_trace("B2L ACTIVATE: vn_rdwr read\n");
++	b2l_early_trace("B2L ACTIVATE: vn_rdwr read vp=%p\n", imgp->ip_vp);
 +#endif
  	error = vn_rdwr(UIO_READ, imgp->ip_vp, imgp->ip_vdata, PAGE_SIZE, 0,
  	    UIO_SYSSPACE, IO_NODELOCKED,
@@ -354,3 +356,147 @@ index bac41b9..5a61039 100644
  	thread_bootstrap_return();
  }
  
+
+diff --git a/bsd/vfs/vfs_cluster.c b/bsd/vfs/vfs_cluster.c
+index 7ae2f39..8c5c9c1 100644
+--- a/bsd/vfs/vfs_cluster.c
++++ b/bsd/vfs/vfs_cluster.c
+@@ -101,6 +101,9 @@
+ #include <libkern/OSAtomic.h>
+ 
+ #include <sys/sdt.h>
++#if defined(ARM64_BOARD_CONFIG_B2L)
++#include <arm64/b2l_early.h>
++#endif
+ 
+ #include <stdbool.h>
+ 
+@@ -2404,7 +2407,18 @@ create_cached_upl:
+ 			cbp->b_attr.ba_flags |= BA_RAW_ENCRYPTED_IO;
+ 		}
+ 
++#if defined(ARM64_BOARD_CONFIG_B2L)
++		extern int b2l_exec_started;
++		if (b2l_exec_started) {
++			b2l_early_trace("B2L CL: VNOP_STRAT cbp=%p blk=%lld sz=%d\n", cbp, (int64_t)cbp->b_blkno, cbp->b_bcount);
++		}
++#endif
+ 		(void) VNOP_STRATEGY(cbp);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++		if (b2l_exec_started) {
++			b2l_early_trace("B2L CL: VNOP_STRAT done\n");
++		}
++#endif
+ 
+ 		if (need_EOT == TRUE) {
+ 			if (!(flags & CL_ASYNC)) {
+@@ -4600,6 +4614,12 @@ cluster_read(vnode_t vp, struct uio *uio, off_t filesize, int xflags)
+ int
+ cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*callback)(buf_t, void *), void *callback_arg)
+ {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	extern int b2l_exec_started;
++	if (b2l_exec_started) {
++		b2l_early_trace("B2L CL: read_ext vp=%p fsz=%lld\n", vp, filesize);
++	}
++#endif
+ 	int             retval = 0;
+ 	int             flags;
+ 	user_ssize_t    cur_resid;
+@@ -4712,6 +4732,12 @@ cluster_read_upl_release(upl_t upl, int start_pg, int last_pg, int take_referenc
+ static int
+ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t filesize, int flags, int (*callback)(buf_t, void *), void *callback_arg)
+ {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	extern int b2l_exec_started;
++	if (b2l_exec_started) {
++		b2l_early_trace("B2L CL: read_copy req=%u fsz=%lld\n", io_req_size, filesize);
++	}
++#endif
+ 	upl_page_info_t *pl;
+ 	upl_t            upl = NULL;
+ 	vm_offset_t      upl_offset;
+@@ -4981,6 +5007,11 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
+ 		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 33)) | DBG_FUNC_START,
+ 		    upl, (int)upl_f_offset, upl_size, start_offset, 0);
+ 
++#if defined(ARM64_BOARD_CONFIG_B2L)
++		if (b2l_exec_started) {
++			b2l_early_trace("B2L CL: upl_f_off=%lld sz=%u\n", (int64_t)upl_f_offset, upl_size);
++		}
++#endif
+ 		kret = ubc_create_upl_kernel(vp,
+ 		    upl_f_offset,
+ 		    upl_size,
+@@ -5068,6 +5099,11 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
+ 			 * issue an asynchronous read to cluster_io
+ 			 */
+ 
++#if defined(ARM64_BOARD_CONFIG_B2L)
++			if (b2l_exec_started) {
++				b2l_early_trace("B2L CL: cluster_io off=%lld sz=%u\n", (int64_t)(upl_f_offset + upl_offset), io_size);
++			}
++#endif
+ 			error = cluster_io(vp, upl, upl_offset, upl_f_offset + upl_offset,
+ 			    io_size, CL_READ | CL_ASYNC | bflag, (buf_t)NULL, &iostate, callback, callback_arg);
+ 
+@@ -5169,7 +5205,17 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
+ 				}
+ 			}
+ 			if (iolock_inited == TRUE) {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++				if (b2l_exec_started) {
++					b2l_early_trace("B2L CL: wait_io iss=%u comp=%u\n", iostate.io_issued, iostate.io_completed);
++				}
++#endif
+ 				cluster_iostate_wait(&iostate, 0, "cluster_read_copy");
++#if defined(ARM64_BOARD_CONFIG_B2L)
++				if (b2l_exec_started) {
++					b2l_early_trace("B2L CL: wait_io done err=%d\n", iostate.io_error);
++				}
++#endif
+ 			}
+ 
+ 			if (iostate.io_error) {
+diff --git a/bsd/vfs/vfs_vnops.c b/bsd/vfs/vfs_vnops.c
+index 8ab165e..b7d2857 100644
+--- a/bsd/vfs/vfs_vnops.c
++++ b/bsd/vfs/vfs_vnops.c
+@@ -107,6 +107,9 @@
+ #if CONFIG_MACF
+ #include <security/mac_framework.h>
+ #endif
++#if defined(ARM64_BOARD_CONFIG_B2L)
++#include <arm64/b2l_early.h>
++#endif
+ 
+ #include <IOKit/IOBSD.h>
+ #include <libkern/section_keywords.h>
+@@ -1071,11 +1074,27 @@ vn_rdwr_64(
+ #endif
+ 
+ 	if (error == 0) {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++		extern int b2l_exec_started;
++		if (b2l_exec_started) {
++			b2l_early_trace("B2L VN: rdwr_64 vp=%p rw=%d off=%lld flg=0x%x\n", vp, rw, offset, ioflg);
++		}
++#endif
+ 		if (rw == UIO_READ) {
+ 			if (vnode_isswap(vp) && ((ioflg & IO_SWAP_DISPATCH) == 0)) {
+ 				error = vn_read_swapfile(vp, auio);
+ 			} else {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++				if (b2l_exec_started) {
++					b2l_early_trace("B2L VN: before VNOP_READ vp=%p\n", vp);
++				}
++#endif
+ 				error = VNOP_READ(vp, auio, ioflg, &context);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++				if (b2l_exec_started) {
++					b2l_early_trace("B2L VN: after VNOP_READ ret=%d res=%lld\n", error, auio ? (int64_t)uio_resid(auio) : -1);
++				}
++#endif
+ 			}
+ 		} else {
+ 			error = VNOP_WRITE(vp, auio, ioflg, &context);
