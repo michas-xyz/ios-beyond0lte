@@ -99,7 +99,7 @@ sudo python3 -I "$REPO_ROOT/scripts/prepare-ios-root.py" "$ROOT_MNT" --verify
 
 echo "=== 10. Translate standalone Mach-O binaries ==="
 find "$ROOT_MNT" -xdev -type f -size +8k ! -path '*/com.apple.dyld/*' ! -path "$ROOT_MNT/private/var/*" -print0 | \
-  xargs -0 sudo "$REPO_ROOT/nc-static" macho-apply || true
+  xargs -0 -r -n 128 sudo "$REPO_ROOT/nc-static" macho-apply || true
 
 echo "=== 11. Clean unmount and fsck ==="
 sync

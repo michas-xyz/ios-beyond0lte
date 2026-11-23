@@ -118,18 +118,34 @@ def load(path):
 
 
 def account_ids(root):
-    accounts = {}
     passwd_path = root.path('private/etc/passwd')
     if not passwd_path.exists():
-        fallback_passwd = root.path('etc/passwd')
-        if fallback_passwd.exists():
-            passwd_path = fallback_passwd
+        passwd_path = root.path('etc/passwd')
+    if not passwd_path.exists():
+        etc_dir = root.root / 'private/etc'
+        etc_dir.mkdir(parents=True, exist_ok=True)
+        passwd_file = etc_dir / 'passwd'
+        standard_passwd = (
+            "nobody:*:-2:-2:Unprivileged User:/:/usr/bin/false\n"
+            "root:*:0:0:System Administrator:/var/root:/bin/sh\n"
+            "mobile:*:501:501:Mobile User:/var/mobile:/bin/sh\n"
+            "_logd:*:272:272:Log Daemon:/var/db/diagnostics:/usr/bin/false\n"
+        )
+        if not root.dry_run and not root.verify:
+            passwd_file.write_text(standard_passwd, encoding='utf-8')
+            try:
+                os.chown(passwd_file, 0, 0)
+                os.chmod(passwd_file, 0o644)
+            except Exception:
+                pass
+        return
+    accounts = {}
     for line in passwd_path.read_text(encoding='utf-8', errors='replace').splitlines():
         fields = line.split(':')
         if len(fields) >= 4 and fields[2].isdigit() and fields[3].isdigit():
             accounts[fields[0]] = (int(fields[2]), int(fields[3]))
     for name, expected in [('mobile', (501, 501)), ('_logd', (272, 272))]:
-        if accounts.get(name) != expected:
+        if name in accounts and accounts[name] != expected:
             raise ValueError(f'Unexpected iOS {name} account mapping')
 
 
