@@ -119,7 +119,12 @@ def load(path):
 
 def account_ids(root):
     accounts = {}
-    for line in root.path('private/etc/passwd').read_text().splitlines():
+    passwd_path = root.path('private/etc/passwd')
+    if not passwd_path.exists():
+        fallback_passwd = root.path('etc/passwd')
+        if fallback_passwd.exists():
+            passwd_path = fallback_passwd
+    for line in passwd_path.read_text(encoding='utf-8', errors='replace').splitlines():
         fields = line.split(':')
         if len(fields) >= 4 and fields[2].isdigit() and fields[3].isdigit():
             accounts[fields[0]] = (int(fields[2]), int(fields[3]))
@@ -225,11 +230,20 @@ def cryptex_links(root):
                     continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if stat.S_ISLNK(mode):
-                    os.symlink(os.readlink(source), destination)
+                    try:
+                        os.symlink(os.readlink(source), destination)
+                    except FileExistsError:
+                        pass
                     st = source.lstat()
-                    os.chown(destination, st.st_uid, st.st_gid, follow_symlinks=False)
+                    try:
+                        os.chown(destination, st.st_uid, st.st_gid, follow_symlinks=False)
+                    except Exception:
+                        pass
                 else:
-                    os.link(source, destination)
+                    try:
+                        os.link(source, destination)
+                    except FileExistsError:
+                        pass
     return linked
 
 
@@ -246,10 +260,25 @@ def main():
     if not (args.dry_run or args.verify) and os.geteuid() != 0:
         parser.error('Run as root on a writable image with volume ownership enabled')
     root = Root(args.mounted_root, args.dry_run, args.verify)
-    version = load(root.path('System/Library/CoreServices/SystemVersion.plist'))
+
+    # In modern iOS, SystemVersion.plist is located in the OS cryptex
+    sys_ver_path = root.path('System/Library/CoreServices/SystemVersion.plist')
+    if not sys_ver_path.exists():
+        cryptex_ver = root.path('private/preboot/Cryptexes/OS/System/Library/CoreServices/SystemVersion.plist')
+        if cryptex_ver.exists():
+            sys_ver_path = cryptex_ver
+        else:
+            found = list(root.root.glob('**/SystemVersion.plist'))
+            if found:
+                sys_ver_path = found[0]
+            else:
+                raise FileNotFoundError('SystemVersion.plist not found in root or Cryptexes')
+    version = load(sys_ver_path)
     build, product = version['ProductBuildVersion'], version['ProductVersion']
     if not isinstance(build, str) or not isinstance(product, str) or not build or not product:
         raise ValueError('Invalid SystemVersion build or product version')
+
+    links = 0 if args.no_cryptex_links else cryptex_links(root)
     account_ids(root)
     directories(root)
     root.pref('com.apple.migration', {
@@ -266,7 +295,6 @@ def main():
     root.pref('com.apple.managedconfiguration.notbackedup', {
         'LockdownActivationIndicatesCloudConfigurationAvailable': False})
     ark = activation_ark(root, build, product)
-    links = 0 if args.no_cryptex_links else cryptex_links(root)
     report = {
         'product_version': product, 'build_version': build, 'dry_run': args.dry_run,
         'verification_only': args.verify,
