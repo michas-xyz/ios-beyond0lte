@@ -18,6 +18,8 @@ sudo apt-get install -y --no-install-recommends \
 echo "=== 2. Build apfs-fuse with LZFSE submodule ==="
 rm -rf /tmp/apfs-fuse
 git clone --recursive https://github.com/sgan81/apfs-fuse.git /tmp/apfs-fuse
+sed -i '1i #include <cstdint>' /tmp/apfs-fuse/ApfsLib/PList.h
+sed -i '1i #include <cstdint>' /tmp/apfs-fuse/ApfsLib/Global.h
 mkdir -p /tmp/apfs-fuse/build
 cd /tmp/apfs-fuse/build
 cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release ..
@@ -25,12 +27,14 @@ make -j"$(nproc)"
 sudo cp apfs-fuse /usr/local/bin/
 which apfs-fuse
 
-echo "=== 3. Build lzfse CLI ==="
+echo "=== 3. Build lzfse CLI and library ==="
 rm -rf /tmp/lzfse
 git clone --depth 1 https://github.com/lzfse/lzfse.git /tmp/lzfse
 cd /tmp/lzfse
 make -j"$(nproc)"
 sudo cp build/bin/lzfse /usr/local/bin/
+sudo cp build/bin/liblzfse.so /usr/local/lib/ || true
+sudo ldconfig || true
 which lzfse
 
 echo "=== 4. Compile nc-static ==="

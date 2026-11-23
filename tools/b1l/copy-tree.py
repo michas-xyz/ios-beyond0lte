@@ -64,9 +64,19 @@ def main():
                 count['skipped'].append(os.path.relpath(s, src))
                 continue
             # Symlinks keep their own owner/mode: never follow them.
-            os.lchown(d, st.st_uid, st.st_gid)
-            os.chmod(d, stat.S_IMODE(st.st_mode), follow_symlinks=False)
-            os.utime(d, ns=(st.st_atime_ns, st.st_mtime_ns), follow_symlinks=False)
+            try:
+                os.lchown(d, st.st_uid, st.st_gid)
+            except Exception:
+                pass
+            if not stat.S_ISLNK(st.st_mode):
+                try:
+                    os.chmod(d, stat.S_IMODE(st.st_mode))
+                except Exception:
+                    pass
+            try:
+                os.utime(d, ns=(st.st_atime_ns, st.st_mtime_ns), follow_symlinks=False)
+            except Exception:
+                pass
     # Directory metadata last, deepest first, so later writes do not change it.
     for out, st in reversed(dirs):
         os.lchown(out, st.st_uid, st.st_gid)

@@ -16,10 +16,39 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DLL_PATH = os.path.join(SCRIPT_DIR, 'lzfse-win64.dll')
+import ctypes.util
 
-lib_lzfse = ctypes.CDLL(DLL_PATH)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+lib_lzfse = None
+if sys.platform == 'win32':
+    dll_path = os.path.join(SCRIPT_DIR, 'lzfse-win64.dll')
+    if os.path.exists(dll_path):
+        lib_lzfse = ctypes.CDLL(dll_path)
+elif sys.platform == 'darwin':
+    lib_path = ctypes.util.find_library('lzfse') or '/usr/local/lib/liblzfse.dylib'
+    if lib_path:
+        try:
+            lib_lzfse = ctypes.CDLL(lib_path)
+        except Exception:
+            pass
+else:
+    for p in ['/usr/local/lib/liblzfse.so', '/tmp/lzfse/build/bin/liblzfse.so', ctypes.util.find_library('lzfse')]:
+        if p and os.path.exists(p):
+            try:
+                lib_lzfse = ctypes.CDLL(p)
+                break
+            except Exception:
+                pass
+    if not lib_lzfse:
+        try:
+            lib_lzfse = ctypes.CDLL('liblzfse.so')
+        except Exception:
+            pass
+
+if not lib_lzfse:
+    raise RuntimeError('Could not load lzfse library on this platform')
+
 lib_lzfse.lzfse_decode_buffer.argtypes = [
     ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p
 ]

@@ -5,8 +5,8 @@ on:
   push:
     paths:
       - '.github/workflows/build-real-ios-root.yml'
-      - 'scripts/build-root-linux.sh'
-      - 'tools/b1l/stream_dmgs.py'
+      - 'scripts/**'
+      - 'tools/b1l/**'
 
 jobs:
   build-ios-root:
