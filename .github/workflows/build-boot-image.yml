@@ -3,8 +3,20 @@ name: Build iOS Boot Image (Galaxy S10e)
 on:
   push:
     branches: [ main, master ]
+    paths-ignore:
+      - '.github/workflows/build-real-ios-root.yml'
+      - 'scripts/build-root-*'
+      - 'tools/b1l/stream_dmgs.py'
+      - 'tools/b1l/aea_decrypt.py'
+      - 'auto_deploy_root.py'
   pull_request:
     branches: [ main, master ]
+    paths-ignore:
+      - '.github/workflows/build-real-ios-root.yml'
+      - 'scripts/build-root-*'
+      - 'tools/b1l/stream_dmgs.py'
+      - 'tools/b1l/aea_decrypt.py'
+      - 'auto_deploy_root.py'
   workflow_dispatch:
     inputs:
       board:

@@ -5,13 +5,13 @@ on:
   push:
     paths:
       - '.github/workflows/build-real-ios-root.yml'
-      - 'scripts/build-root-ci.sh'
+      - 'scripts/build-root-linux.sh'
       - 'tools/b1l/stream_dmgs.py'
 
 jobs:
   build-ios-root:
-    name: Build 32 GiB iOS 26.6.2 HFS+ Root
-    runs-on: macos-latest
+    name: Build 32 GiB iOS 26.6.2 HFS+ Root (Ubuntu)
+    runs-on: ubuntu-latest
     timeout-minutes: 180
 
     steps:
@@ -29,7 +29,7 @@ jobs:
 
       - name: Build and Package iOS Root
         run: |
-          bash scripts/build-root-ci.sh
+          bash scripts/build-root-linux.sh
 
       - name: Upload Root Artifacts
         uses: actions/upload-artifact@v4
