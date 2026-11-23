@@ -33,9 +33,10 @@ git clone --depth 1 https://github.com/lzfse/lzfse.git /tmp/lzfse
 cd /tmp/lzfse
 make -j"$(nproc)"
 sudo cp build/bin/lzfse /usr/local/bin/
-sudo cp build/bin/liblzfse.so /usr/local/lib/ || true
+sudo gcc -shared -fPIC -O3 src/lzfse_decode.c src/lzfse_decode_base.c src/lzfse_encode.c src/lzfse_encode_base.c src/lzfse_fse.c src/lzvn_decode_base.c src/lzvn_encode_base.c -Isrc -o /usr/local/lib/liblzfse.so
 sudo ldconfig || true
 which lzfse
+ls -l /usr/local/lib/liblzfse.so
 
 echo "=== 4. Compile nc-static ==="
 cd "$REPO_ROOT"
