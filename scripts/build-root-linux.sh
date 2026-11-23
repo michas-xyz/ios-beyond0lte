@@ -20,7 +20,7 @@ rm -rf /tmp/apfs-fuse
 git clone --recursive https://github.com/sgan81/apfs-fuse.git /tmp/apfs-fuse
 mkdir -p /tmp/apfs-fuse/build
 cd /tmp/apfs-fuse/build
-cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release ..
 make -j"$(nproc)"
 sudo cp apfs-fuse /usr/local/bin/
 which apfs-fuse
