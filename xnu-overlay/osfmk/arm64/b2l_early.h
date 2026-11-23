@@ -20,7 +20,6 @@ void b2l_early_relocate(uint64_t base);
 int b2l_early_range(uint64_t *physical, uint64_t *length);
 int b2l_early_available(void);
 uint64_t b2l_early_virtual(void);
-extern int b2l_exec_started;
 #ifdef __cplusplus
 }
 #endif

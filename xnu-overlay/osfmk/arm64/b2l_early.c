@@ -21,7 +21,6 @@ static unsigned b2l_console_cpu(void)
     return (unsigned)(__builtin_arm_rsr64("MPIDR_EL1") & 0xffff) + 1;
 }
 extern void b2l_smp_dump(void);
-int b2l_exec_started = 0;
 
 static void
 b2l_clear_row(unsigned row)
@@ -43,35 +42,8 @@ b2l_newline(void)
 	b2l_clear_row(b2l_row + 1 < b2l_rows ? b2l_row + 1 : b2l_panic_floor);
 }
 
-static inline uint64_t
-b2l_daif_save_and_disable(void)
-{
-#if defined(__arm64__) || defined(__aarch64__)
-	uint64_t daif;
-	__asm__ volatile(
-		"mrs %0, DAIF\n"
-		"msr DAIFSet, #2\n"
-		: "=r"(daif) :: "memory"
-	);
-	return daif;
-#else
-	return 0;
-#endif
-}
-
-static inline void
-b2l_daif_restore(uint64_t daif)
-{
-#if defined(__arm64__) || defined(__aarch64__)
-	__asm__ volatile("msr DAIF, %0" :: "r"(daif) : "memory");
-#else
-	(void)daif;
-#endif
-}
-
 static volatile unsigned b2l_console_owner = 0;
 static volatile unsigned b2l_console_depth = 0;
-static volatile uint64_t b2l_console_saved_daif = 0;
 
 static void
 b2l_console_acquire(void)
@@ -82,14 +54,11 @@ b2l_console_acquire(void)
 		return;
 	}
 	while (1) {
-		uint64_t daif = b2l_daif_save_and_disable();
 		unsigned expected = 0;
 		if (__atomic_compare_exchange_n(&b2l_console_owner, &expected, cpu, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
-			b2l_console_saved_daif = daif;
 			b2l_console_depth = 1;
 			return;
 		}
-		b2l_daif_restore(daif);
 #if defined(__arm64__) || defined(__aarch64__)
 		__builtin_arm_yield();
 #endif
@@ -101,9 +70,7 @@ b2l_console_release(void)
 {
 	if (b2l_console_depth > 0) {
 		if (--b2l_console_depth == 0) {
-			uint64_t daif = b2l_console_saved_daif;
 			__atomic_store_n(&b2l_console_owner, 0, __ATOMIC_RELEASE);
-			b2l_daif_restore(daif);
 		}
 	}
 }

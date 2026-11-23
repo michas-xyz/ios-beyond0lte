@@ -71,54 +71,32 @@ b2l_strategy(struct buf *bp)
 	size_t done = 0;
 	caddr_t data = NULL;
 	int error = 0;
-	extern int b2l_exec_started;
-	if (b2l_exec_started) {
-		b2l_early_trace("B2L STRAT: bp=%p cnt=%u\n", bp, count);
-		b2l_early_trace("B2L STRAT: blk=%lld\n", (int64_t)buf_blkno(bp));
-	}
 	buf_setresid(bp, count);
 	if (!v) {
 		error = ENXIO;
-		if (b2l_exec_started) b2l_early_trace("B2L STRAT: no view!\n");
 	} else if (!(buf_flags(bp) & B_READ) && !v->writable) {
 		error = EROFS;
-		if (b2l_exec_started) b2l_early_trace("B2L STRAT: rofs!\n");
 	} else if (buf_blkno(bp) < 0) {
 		error = EINVAL;
-		if (b2l_exec_started) b2l_early_trace("B2L STRAT: neg blk!\n");
 	} else {
-		if (b2l_exec_started) b2l_early_trace("B2L STRAT: lock\n");
 		lck_mtx_lock(&b2l_ufs_disk_lock);
 		uint64_t block = (uint64_t)buf_blkno(bp);
 		if (block > UINT64_MAX / v->sector_size) {
 			error = EINVAL;
-			if (b2l_exec_started) b2l_early_trace("B2L STRAT: ovf!\n");
-		} else {
-			if (b2l_exec_started) b2l_early_trace("B2L STRAT: map\n");
-			error = buf_map(bp, &data);
-			if (b2l_exec_started) b2l_early_trace("B2L STRAT: map ret=%d data=%p\n", error, data);
-			if (error == 0) {
-				if (buf_flags(bp) & B_READ) {
-					if (b2l_exec_started) b2l_early_trace("B2L STRAT: read_view off=%llu\n", block * v->sector_size);
-					error = b2l_ufs_read_view(&b2l_reader, v->base, v->size,
-					    block * v->sector_size, count, 0, data, &done);
-				} else {
-					error = b2l_ufs_write_view(&b2l_reader, v->base, v->size,
-					    block * v->sector_size, count, data, &done);
-				}
-				if (b2l_exec_started) b2l_early_trace("B2L STRAT: view ret=%d done=%u\n", error, (unsigned)done);
-				buf_unmap(bp);
-				if (b2l_exec_started) b2l_early_trace("B2L STRAT: unmap done\n");
-			}
+		} else if ((error = buf_map(bp, &data)) == 0) {
+			if (buf_flags(bp) & B_READ)
+				error = b2l_ufs_read_view(&b2l_reader, v->base, v->size,
+				    block * v->sector_size, count, 0, data, &done);
+			else
+				error = b2l_ufs_write_view(&b2l_reader, v->base, v->size,
+				    block * v->sector_size, count, data, &done);
+			buf_unmap(bp);
 		}
 		lck_mtx_unlock(&b2l_ufs_disk_lock);
-		if (b2l_exec_started) b2l_early_trace("B2L STRAT: unlock done\n");
 	}
 	buf_setresid(bp, count - (uint32_t)done);
 	if (error) buf_seterror(bp, error);
-	if (b2l_exec_started) b2l_early_trace("B2L STRAT: biodone bp=%p\n", bp);
 	buf_biodone(bp);
-	if (b2l_exec_started) b2l_early_trace("B2L STRAT: biodone done\n");
 }
 
 static int
