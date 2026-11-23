@@ -39,6 +39,7 @@ device-*/
 backup-*/
 vendor-audio/
 .env
+.xnu_cache/
 
 # Apple binaries extracted from the IPSW
 dyld_shared_cache*

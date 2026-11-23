@@ -357,7 +357,6 @@ index bac41b9..5a61039 100644
  
 
 diff --git a/bsd/vfs/vfs_cluster.c b/bsd/vfs/vfs_cluster.c
-index 7ae2f39..8c5c9c1 100644
 --- a/bsd/vfs/vfs_cluster.c
 +++ b/bsd/vfs/vfs_cluster.c
 @@ -101,6 +101,9 @@
@@ -370,7 +369,7 @@ index 7ae2f39..8c5c9c1 100644
  
  #include <stdbool.h>
  
-@@ -2404,7 +2407,18 @@ create_cached_upl:
+@@ -2404,7 +2407,18 @@
  			cbp->b_attr.ba_flags |= BA_RAW_ENCRYPTED_IO;
  		}
  
@@ -389,33 +388,156 @@ index 7ae2f39..8c5c9c1 100644
  
  		if (need_EOT == TRUE) {
  			if (!(flags & CL_ASYNC)) {
-@@ -4600,6 +4614,12 @@ cluster_read(vnode_t vp, struct uio *uio, off_t filesize, int xflags)
+@@ -4600,6 +4614,14 @@
  int
  cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*callback)(buf_t, void *), void *callback_arg)
  {
 +#if defined(ARM64_BOARD_CONFIG_B2L)
 +	extern int b2l_exec_started;
 +	if (b2l_exec_started) {
-+		b2l_early_trace("B2L CL: read_ext vp=%p fsz=%lld\n", vp, filesize);
++		b2l_early_trace("B2L CL: ext vp=%p fsz=%lld flg=0x%x vf=0x%x seg=%d res=%lld off=%lld\n",
++			vp, filesize, xflags, vp ? vp->v_flag : 0, uio ? uio->uio_segflg : -1,
++			uio ? (int64_t)uio_resid(uio) : -1, uio ? (int64_t)uio->uio_offset : -1);
 +	}
 +#endif
  	int             retval = 0;
  	int             flags;
  	user_ssize_t    cur_resid;
-@@ -4712,6 +4732,12 @@ cluster_read_upl_release(upl_t upl, int start_pg, int last_pg, int take_referenc
+@@ -4654,11 +4676,33 @@
+ 	} else if (flags & IO_ENCRYPTED) {
+ 		check_io_type = true;
+ 	}
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	if (b2l_exec_started) {
++		b2l_early_trace("B2L CL: chk_io=%d flg=0x%x\n", (int)check_io_type, flags);
++	}
++#endif
+ 	if (check_io_type) {
+ 		retval = cluster_io_type(uio, &read_type, &read_length, 0);
+-	}
++#if defined(ARM64_BOARD_CONFIG_B2L)
++		if (b2l_exec_started) {
++			b2l_early_trace("B2L CL: chk_io done ret=%d type=%d len=%u\n", retval, read_type, read_length);
++		}
++#endif
++	}
++
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	if (b2l_exec_started) {
++		b2l_early_trace("B2L CL: pre-loop res=%lld off=%lld ret=%d type=%d\n",
++			(int64_t)uio_resid(uio), (int64_t)uio->uio_offset, retval, read_type);
++	}
++#endif
+ 
+ 	while ((cur_resid = uio_resid(uio)) && uio->uio_offset < filesize && retval == 0) {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++		if (b2l_exec_started) {
++			b2l_early_trace("B2L CL: loop enter cur_res=%lld type=%d\n", (int64_t)cur_resid, read_type);
++		}
++#endif
+ 		switch (read_type) {
+ 		case IO_COPY:
+ 			/*
+@@ -4672,22 +4716,67 @@
+ 				io_size = (u_int32_t)cur_resid;
+ 			}
+ 
++#if defined(ARM64_BOARD_CONFIG_B2L)
++			if (b2l_exec_started) {
++				b2l_early_trace("B2L CL: call copy io_sz=%u\n", io_size);
++			}
++#endif
+ 			retval = cluster_read_copy(vp, uio, io_size, filesize, flags, callback, callback_arg);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++			if (b2l_exec_started) {
++				b2l_early_trace("B2L CL: copy done ret=%d\n", retval);
++			}
++#endif
+ 			break;
+ 
+ 		case IO_DIRECT:
++#if defined(ARM64_BOARD_CONFIG_B2L)
++			if (b2l_exec_started) {
++				b2l_early_trace("B2L CL: call direct\n");
++			}
++#endif
+ 			retval = cluster_read_direct(vp, uio, filesize, &read_type, &read_length, flags, callback, callback_arg);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++			if (b2l_exec_started) {
++				b2l_early_trace("B2L CL: direct done ret=%d\n", retval);
++			}
++#endif
+ 			break;
+ 
+ 		case IO_CONTIG:
++#if defined(ARM64_BOARD_CONFIG_B2L)
++			if (b2l_exec_started) {
++				b2l_early_trace("B2L CL: call contig\n");
++			}
++#endif
+ 			retval = cluster_read_contig(vp, uio, filesize, &read_type, &read_length, callback, callback_arg, flags);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++			if (b2l_exec_started) {
++				b2l_early_trace("B2L CL: contig done ret=%d\n", retval);
++			}
++#endif
+ 			break;
+ 
+ 		case IO_UNKNOWN:
++#if defined(ARM64_BOARD_CONFIG_B2L)
++			if (b2l_exec_started) {
++				b2l_early_trace("B2L CL: call io_type\n");
++			}
++#endif
+ 			retval = cluster_io_type(uio, &read_type, &read_length, 0);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++			if (b2l_exec_started) {
++				b2l_early_trace("B2L CL: io_type done ret=%d type=%d\n", retval, read_type);
++			}
++#endif
+ 			break;
+ 		}
+ 	}
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	if (b2l_exec_started) {
++		b2l_early_trace("B2L CL: ext exit ret=%d res=%lld\n", retval, (int64_t)uio_resid(uio));
++	}
++#endif
+ 	return retval;
+ }
+ 
+@@ -4712,6 +4801,12 @@
  static int
  cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t filesize, int flags, int (*callback)(buf_t, void *), void *callback_arg)
  {
 +#if defined(ARM64_BOARD_CONFIG_B2L)
 +	extern int b2l_exec_started;
 +	if (b2l_exec_started) {
-+		b2l_early_trace("B2L CL: read_copy req=%u fsz=%lld\n", io_req_size, filesize);
++		b2l_early_trace("B2L CL: copy req=%u fsz=%lld flg=0x%x\n", io_req_size, filesize, flags);
 +	}
 +#endif
  	upl_page_info_t *pl;
  	upl_t            upl = NULL;
  	vm_offset_t      upl_offset;
-@@ -4981,6 +5007,11 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
+@@ -4879,7 +4974,17 @@
+ 
+ 				io_requested = io_resid;
+ 
++#if defined(ARM64_BOARD_CONFIG_B2L)
++				if (b2l_exec_started) {
++					b2l_early_trace("B2L CL: copy_ubc req=%u resid=%u\n", io_requested, io_resid);
++				}
++#endif
+ 				retval = cluster_copy_ubc_data_internal(vp, uio, (int *)&io_resid, 0, take_reference);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++				if (b2l_exec_started) {
++					b2l_early_trace("B2L CL: copy_ubc ret=%d resid=%u\n", retval, io_resid);
++				}
++#endif
+ 
+ 				xsize = io_requested - io_resid;
+ 
+@@ -4981,6 +5086,11 @@
  		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 33)) | DBG_FUNC_START,
  		    upl, (int)upl_f_offset, upl_size, start_offset, 0);
  
@@ -427,7 +549,19 @@ index 7ae2f39..8c5c9c1 100644
  		kret = ubc_create_upl_kernel(vp,
  		    upl_f_offset,
  		    upl_size,
-@@ -5068,6 +5099,11 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
+@@ -4988,6 +5098,11 @@
+ 		    &pl,
+ 		    UPL_FILE_IO | UPL_SET_LITE,
+ 		    VM_KERN_MEMORY_FILE);
++#if defined(ARM64_BOARD_CONFIG_B2L)
++		if (b2l_exec_started) {
++			b2l_early_trace("B2L CL: upl kret=%d upl=%p\n", kret, upl);
++		}
++#endif
+ 		if (kret != KERN_SUCCESS) {
+ 			panic("cluster_read_copy: failed to get pagelist");
+ 		}
+@@ -5068,6 +5183,11 @@
  			 * issue an asynchronous read to cluster_io
  			 */
  
@@ -439,7 +573,7 @@ index 7ae2f39..8c5c9c1 100644
  			error = cluster_io(vp, upl, upl_offset, upl_f_offset + upl_offset,
  			    io_size, CL_READ | CL_ASYNC | bflag, (buf_t)NULL, &iostate, callback, callback_arg);
  
-@@ -5169,7 +5205,17 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
+@@ -5169,7 +5289,17 @@
  				}
  			}
  			if (iolock_inited == TRUE) {
@@ -457,6 +591,45 @@ index 7ae2f39..8c5c9c1 100644
  			}
  
  			if (iostate.io_error) {
+@@ -5378,6 +5508,12 @@
+ cluster_read_direct(vnode_t vp, struct uio *uio, off_t filesize, int *read_type, u_int32_t *read_length,
+     int flags, int (*callback)(buf_t, void *), void *callback_arg)
+ {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	extern int b2l_exec_started;
++	if (b2l_exec_started) {
++		b2l_early_trace("B2L CL: direct_fn vp=%p fsz=%lld\n", vp, filesize);
++	}
++#endif
+ 	upl_t            upl = NULL;
+ 	upl_page_info_t  *pl;
+ 	off_t            max_io_size;
+@@ -6012,6 +6148,12 @@
+ cluster_read_contig(vnode_t vp, struct uio *uio, off_t filesize, int *read_type, u_int32_t *read_length,
+     int (*callback)(buf_t, void *), void *callback_arg, int flags)
+ {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	extern int b2l_exec_started;
++	if (b2l_exec_started) {
++		b2l_early_trace("B2L CL: contig_fn vp=%p fsz=%lld\n", vp, filesize);
++	}
++#endif
+ 	upl_page_info_t *pl;
+ 	upl_t            upl[MAX_VECTS];
+ 	vm_offset_t      upl_offset;
+@@ -6244,6 +6386,12 @@
+ static int
+ cluster_io_type(struct uio *uio, int *io_type, u_int32_t *io_length, u_int32_t min_length)
+ {
++#if defined(ARM64_BOARD_CONFIG_B2L)
++	extern int b2l_exec_started;
++	if (b2l_exec_started) {
++		b2l_early_trace("B2L CL: io_type_fn seg=%d res=%lld\n", uio ? uio->uio_segflg : -1, uio ? (int64_t)uio_resid(uio) : -1);
++	}
++#endif
+ 	user_size_t      iov_len;
+ 	user_addr_t      iov_base = 0;
+ 	upl_t            upl;
 diff --git a/bsd/vfs/vfs_vnops.c b/bsd/vfs/vfs_vnops.c
 index 8ab165e..b7d2857 100644
 --- a/bsd/vfs/vfs_vnops.c
