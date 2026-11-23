@@ -1,0 +1,42 @@
+name: Build S10e Full Real iOS Root
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-real-ios-root.yml'
+      - 'scripts/build-root-ci.sh'
+      - 'tools/b1l/stream_dmgs.py'
+
+jobs:
+  build-ios-root:
+    name: Build 32 GiB iOS 26.6.2 HFS+ Root
+    runs-on: macos-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          pip install cryptography
+
+      - name: Build and Package iOS Root
+        run: |
+          bash scripts/build-root-ci.sh
+
+      - name: Upload Root Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: s10e-ios26-userdata-root
+          path: |
+            out/ipsw/ios26-userdata.hfs.img.gz.part_*
+            out/ipsw/ios26-userdata.hfs.img.sha256
+            out/ipsw/prepare-report.json
+          retention-days: 7
