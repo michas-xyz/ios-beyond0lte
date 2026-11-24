@@ -33,7 +33,7 @@ class B2LInput:public OSObject{
 public:
  alignas(uint32_t) uint8_t backing[128]={};uint8_t*gpio=backing;
  bool stable[4]={},candidate[4]={},touch=true;
- unsigned debounce[4]={},failures=0,keyLogs=0;
+ unsigned debounce[4]={},failures=0,keyLogs=0,recoveries=0;
  B2L_SEC_TS_POINTER pointer={};
  uint64_t pollCount=0,eventCount=0,updateCount=0,bulkCount=0,transferFailures=0;
  uint64_t lastPollStart=0,lastDiagnostic=0,maxPollGapUS=0,maxPollWorkUS=0;
@@ -44,6 +44,7 @@ public:
  B2LInput(){memset(backing,0xff,sizeof(backing));}
  static uint64_t uptimeUS(){return tick++;}
  void quiesce(){quiesced++;}
+ void logDiagIOLog(uint64_t){}
  bool command(uint8_t cmd,uint8_t*out,unsigned n){
   assert(n&&n<=256&&next<script.size());const auto&r=script[next++];assert(r.cmd==cmd&&r.bytes.size()==n);
   if(r.ok)memcpy(out,r.bytes.data(),n);return r.ok;

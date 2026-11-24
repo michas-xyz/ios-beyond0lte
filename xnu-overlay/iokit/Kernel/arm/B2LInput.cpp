@@ -36,6 +36,13 @@ class B2LInput : public IOService {
     static uint64_t uptimeUS(){uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ns);return ns/1000;}
     uint8_t lastCommand;
     B2L_SEC_TS_POINTER pointer;
+    uint64_t handoff[24];
+    uint32_t hoFs1,hoFs2,hoFs3,hoSla,hoCtrl;
+    unsigned diagIoLogs;
+    bool haveLastFail,lastFailRead;
+    uint8_t lastFailCmd;
+    unsigned lastFailBytes,lastFailDone;
+    uint32_t lastFailCtrl,lastFailInt,lastFailErr,lastFailTrans,lastFailFifo,lastFailAddr,lastFailFs1,lastFailFs2;
     static void poll(OSObject*,IOTimerEventSource*);
     void initializeTouch();
     uint32_t r(unsigned off){uint32_t v=*(volatile uint32_t*)(i2c+off);__asm__ volatile("dmb oshld":::"memory");return v;}
@@ -43,8 +50,24 @@ class B2LInput : public IOService {
     void quiesce(){w(0x20,0);w(0x24,r(0x24));w(0x44,r(0x44)&~(1u<<31));w(0,r(0)&~0xc0u);}
     void resetController(){w(0,r(0)|(1u<<31));w(0,r(0)&~(1u<<31));w(0,8);w(8,0x00ffffff);w(0x40,r(0x40)|(1u<<31));}
     void transferFailure(bool read,unsigned n,unsigned at,unsigned budgetUS,uint64_t elapsedUS){
+        haveLastFail=true;lastFailCmd=lastCommand;lastFailRead=read;lastFailBytes=n;lastFailDone=at;
+        lastFailCtrl=r(0);lastFailInt=r(0x24);lastFailErr=r(0x2c);lastFailTrans=r(0x50);
+        lastFailFifo=r(0x30);lastFailAddr=r(0x70);lastFailFs1=r(0x60);lastFailFs2=r(0x64);
         if(transferLogs++<12)b2l_diag_record("B2L TOUCH: cmd=0x%x read=%d bytes=%u done=%u timeout_us=%u elapsed_us=%llu ctrl=0x%x int=0x%x err=0x%x trans=0x%x fifo=0x%x addr=0x%x fs1=0x%x fs2=0x%x\n",
-            lastCommand,read,n,at,budgetUS,elapsedUS,r(0),r(0x24),r(0x2c),r(0x50),r(0x30),r(0x70),r(0x60),r(0x64));
+            lastCommand,read,n,at,budgetUS,elapsedUS,lastFailCtrl,lastFailInt,lastFailErr,lastFailTrans,lastFailFifo,lastFailAddr,lastFailFs1,lastFailFs2);
+    }
+    void logDiagIOLog(uint64_t sec){
+        if(sec<15 || diagIoLogs>=12)return;
+        ++diagIoLogs;
+        IOLog("B2L DIAG EFI: ver=%llu loc=0x%llx init=0x%llx probe=0x%llx rst=0x%llx fn=0x%llx ptr=0x%llx dvdd=0x%llx avdd=0x%llx boot=0x%llx usi=0x%llx tx=%llu fail=%llu\n",
+            handoff[0],handoff[1],handoff[2],handoff[3],handoff[4],handoff[5],handoff[6],handoff[7],handoff[8],handoff[9],handoff[14],handoff[20],handoff[21]);
+        IOLog("B2L DIAG HO: fs1=0x%x fs2=0x%x fs3=0x%x sla=0x%x ctrl=0x%x int=0x%llx err=0x%llx tr=0x%llx fifo=0x%llx\n",
+            hoFs1,hoFs2,hoFs3,hoSla,hoCtrl,handoff[16],handoff[17],handoff[18],handoff[19]);
+        IOLog("B2L DIAG PERF: sec=%llu polls=%llu wire=%llu upd=%llu bulk=%llu tfail=%llu en=%d att=%u pend=%d lcmd=0x%x now_fs1=0x%x now_fs2=0x%x now_ctrl=0x%x\n",
+            sec,pollCount,eventCount,updateCount,bulkCount,transferFailures,touch,initAttempts,initPending,lastCommand,i2c?r(0x60):0,i2c?r(0x64):0,i2c?r(0):0);
+        if(haveLastFail)
+            IOLog("B2L DIAG FAIL: cmd=0x%x rd=%d n=%u at=%u ctrl=0x%x int=0x%x err=0x%x tr=0x%x fifo=0x%x addr=0x%x fs1=0x%x fs2=0x%x\n",
+                lastFailCmd,lastFailRead,lastFailBytes,lastFailDone,lastFailCtrl,lastFailInt,lastFailErr,lastFailTrans,lastFailFifo,lastFailAddr,lastFailFs1,lastFailFs2);
     }
     void noteTransfer(uint64_t begin){
         uint64_t elapsed=uptimeUS()-begin;
@@ -152,14 +175,14 @@ bool B2LInput::start(IOService *provider){
         i2c=(volatile uint8_t*)i2cMap->getVirtualAddress();
         timeoutUS=100000; /* same bounded probe budget as the touch branch */
         const void *property=NULL;unsigned propertySize=0;DTEntry chosen;
-        uint64_t handoff[24]={0};
         if(SecureDTLookupEntry(NULL,"/chosen",&chosen)==kSuccess &&
            SecureDTGetProperty(chosen,"b2l,touch-status",&property,&propertySize)==kSuccess &&
            propertySize==sizeof(handoff))memcpy(handoff,property,sizeof(handoff));
+        hoFs1=r(0x60);hoFs2=r(0x64);hoFs3=r(0x68);hoSla=r(0x6c);hoCtrl=r(0);
         b2l_diag_record("B2L TOUCH EFI: version=%llu locate=0x%llx init=0x%llx probe=0x%llx reset=0x%llx functions=0x%llx pointer=0x%llx dvdd=0x%llx avdd=0x%llx boot=0x%llx usi=0x%llx transfers=%llu failed=%llu\n",
             handoff[0],handoff[1],handoff[2],handoff[3],handoff[4],handoff[5],handoff[6],handoff[7],handoff[8],handoff[9],handoff[14],handoff[20],handoff[21]);
         b2l_diag_record("B2L TOUCH HANDOFF: fs1=0x%x fs2=0x%x fs3=0x%x sla=0x%x ctrl=0x%x int=0x%llx err=0x%llx trans=0x%llx fifo=0x%llx\n",
-            r(0x60),r(0x64),r(0x68),r(0x6c),r(0),handoff[16],handoff[17],handoff[18],handoff[19]);
+            hoFs1,hoFs2,hoFs3,hoSla,hoCtrl,handoff[16],handoff[17],handoff[18],handoff[19]);
         /* A preempted early probe must not disable touch for the entire
          * boot. Retry on this driver's workloop, at most four attempts total. */
         initializeTouch();
@@ -237,6 +260,7 @@ void B2LInput::poll(OSObject *owner,IOTimerEventSource *sender){
             end/1000000,s->pollCount,s->eventCount,s->updateCount,s->bulkCount,
             s->maxPending,s->transferFailures,s->maxPollGapUS,s->maxPollWorkUS,
             s->maxTransferUS,s->transferTimeUS,s->touch,s->initAttempts,s->initPending);
+        s->logDiagIOLog(end/1000000);
         s->maxPending=0;s->maxPollGapUS=0;s->maxPollWorkUS=0;s->maxTransferUS=0;
     }
     sender->setTimeoutMS(20);
