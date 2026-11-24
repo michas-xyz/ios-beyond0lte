@@ -539,7 +539,7 @@ static void b2l_dvfs_start(processor_t const procs[MAX_CPUS])
     static const uint32_t idx[3] = { 2, 3, 4 };
     static const uint32_t target[3] = { 1846000, 2210000, 2080000 };
     static const char *const name[3] = { "cl0 A55", "cl1 A75", "cl2 M4" };
-    uint32_t enable = 1;
+    uint32_t enable = 0; /* Clocks already stable from S-Boot; b2l_dvfs=1 to test ACPM */
     PE_parse_boot_argn("b2l_dvfs", &enable, sizeof(enable));
     struct b2l_acpm a = {};
     a.sram = (volatile uint8_t *)ml_io_map(B2L_ACPM_SRAM_PA, B2L_ACPM_SRAM_SIZE);
@@ -549,7 +549,7 @@ static void b2l_dvfs_start(processor_t const procs[MAX_CPUS])
     b2l_early_trace("B2L DVFS: parse=%d ch=%u id=%u type=%u poll=%u elem=%u len=%u tx=%x/%x/%x (front=%u rear=%u) fvmap=%x enable=%u\n",
         e, B2L_ACPM_DVFS_CH, a.id, a.type, a.poll, a.elem, a.len, a.tx_base, a.tx_front, a.tx_rear,
         e ? 0 : b2l_acpm_rd(&a, a.tx_front), e ? 0 : b2l_acpm_rd(&a, a.tx_rear), a.fvmap, enable);
-    {
+    if (enable > 1) {
         uint32_t plugins = b2l_acpm_rd(&a, B2L_ACPM_INITDATA), np = b2l_acpm_rd(&a, B2L_ACPM_INITDATA + 4);
         if (np <= 16 && b2l_acpm_in(plugins, 48u * np))
             for (uint32_t o = 0; o < 48u * np; o += 24)

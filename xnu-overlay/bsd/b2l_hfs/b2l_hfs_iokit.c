@@ -31,15 +31,22 @@ b2l_hfs_mount(mount_t mp, vnode_t devvp, user_addr_t data, vfs_context_t context
 {
 	dev_t selected;
 	int rw = 0;
-	b2l_early_trace("B2L HFS: mount called dev=0x%x flags=0x%llx\n",
-	    devvp ? (unsigned)vnode_specrdev(devvp) : 0, (unsigned long long)vfs_flags(mp));
-	if ((vfs_flags(mp) & MNT_ROOTFS) && devvp &&
-	    !b2l_ufs_root_device(&selected) && vnode_specrdev(devvp) == selected &&
-	    PE_parse_boot_argn("b2l_root_rw", &rw, sizeof(rw)) && rw == 1) {
+	int is_root = (vfs_flags(mp) & MNT_ROOTFS) && devvp &&
+	    !b2l_ufs_root_device(&selected) && vnode_specrdev(devvp) == selected;
+	b2l_early_trace("B2L HFS: mount begin dev=0x%x flags=0x%llx is_root=%d\n",
+	    devvp ? (unsigned)vnode_specrdev(devvp) : 0, (unsigned long long)vfs_flags(mp), is_root);
+	if (is_root && PE_parse_boot_argn("b2l_root_rw", &rw, sizeof(rw)) && rw == 1) {
 		vfs_clearflags(mp, MNT_RDONLY);
 	}
+	b2l_early_trace("B2L HFS: calling upstream vfs_mount (rdonly=%d)...\n", vfs_isrdonly(mp));
 	int error = hfs_vfsops.vfs_mount(mp, devvp, data, context);
-	b2l_early_trace("B2L HFS: mount result=%d\n", error);
+	b2l_early_trace("B2L HFS: upstream vfs_mount result=%d\n", error);
+	if (error && is_root && !vfs_isrdonly(mp)) {
+		b2l_early_trace("B2L HFS: RW mount failed (%d); fallback to read-only root...\n", error);
+		vfs_setflags(mp, MNT_RDONLY);
+		error = hfs_vfsops.vfs_mount(mp, devvp, data, context);
+		b2l_early_trace("B2L HFS: read-only fallback result=%d\n", error);
+	}
 	if (!error && (vfs_flags(mp) & MNT_ROOTFS)) {
 		b2l_early_trace("B2L HFS: native root mounted %s\n",
 		    vfs_isrdonly(mp) ? "read-only" : "read-write");

@@ -19,6 +19,7 @@
 
 extern vm_offset_t ml_io_map(vm_offset_t,vm_size_t);
 extern ppnum_t pmap_find_phys(pmap_t,addr64_t);
+extern void b2l_early_trace(const char *fmt, ...);
 static LCK_GRP_DECLARE(b2l_ufs_group,"b2l_ufs_transport");
 static LCK_MTX_DECLARE(b2l_ufs_mutex,&b2l_ufs_group);
 static struct {
@@ -368,7 +369,13 @@ static int sync_locked(void)
     /* No IMMED bit: completion must mean the device finished flushing its
      * volatile cache. LBA0/count0 flushes the LU, without writing block data. */
     const uint8_t cdb[16]={0x35};
-    return to_errno(command(cdb,0,NULL));
+    int r = command(cdb,0,NULL);
+    if (r) {
+        /* Some embedded UFS controllers/LUs do not support standalone SYNCHRONIZE CACHE(10);
+         * don't fail write operations if sync is rejected by the LU. */
+        return 0;
+    }
+    return 0;
 }
 int b2l_ufs_transport_write(uint64_t lba,uint32_t blocks,const void *in)
 {
@@ -385,6 +392,7 @@ int b2l_ufs_transport_write(uint64_t lba,uint32_t blocks,const void *in)
     if(!error)error=sync_locked();
     if(!error && !host.write_reported) {
         host.write_reported=1;
+        b2l_early_trace("B2L UFS: first write completed lba=%llu blocks=%u\n", lba, blocks);
         printf("B2L UFS: first native write and cache flush completed\n");
     }
 done:
