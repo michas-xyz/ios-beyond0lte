@@ -225,8 +225,8 @@ jobs:
           git clone --depth 1 https://github.com/Project-Silicium/Silicium-ACPI.git Silicium-ACPI
           # Initialize all other submodules
           git submodule update --init --recursive --depth 1 Binaries Common/Mu Common/Mu_OEM_Sample Mu_Basecore Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl
-          # Clone and apply beyond2lte-uefi reference overlay
-          git clone --depth 1 https://github.com/orhunnx/beyond2lte-uefi.git $HOME/beyond2lte-uefi
+          # Clone and apply beyond2lte-uefi reference overlay (codex/touch-from-8549bfa for B2LTouchDxe)
+          git clone --depth 1 -b codex/touch-from-8549bfa https://github.com/orhunnx/beyond2lte-uefi.git $HOME/beyond2lte-uefi
           cp -r $HOME/beyond2lte-uefi/mu-silicium-overlay/* $HOME/Mu-Silicium/
           if [ -d "$HOME/beyond2lte-uefi/silicium-acpi-overlay" ]; then
             cp -r $HOME/beyond2lte-uefi/silicium-acpi-overlay/* $HOME/Mu-Silicium/Silicium-ACPI/ || true
@@ -290,7 +290,8 @@ jobs:
           python3 scripts/prepare-boot-firmware.py \
             --mu $HOME/Mu-Silicium \
             --loader $HOME/Mu-Silicium/Build/B2LXnu/RELEASE_CLANGPDB/AARCH64/XnuLoader.efi \
-            --loader-guid 92742D9E-1A4F-42F8-9DC9-53895297B2F4
+            --loader-guid 92742D9E-1A4F-42F8-9DC9-53895297B2F4 \
+            --enable-touch
 
       - name: Install Python Requirements for Mu-Silicium
         run: |
