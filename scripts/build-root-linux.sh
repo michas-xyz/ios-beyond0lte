@@ -148,9 +148,56 @@ if [[ ! -f "$ROOT_MNT/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm
 fi
 echo "Verified: Cryptex links created successfully in /System/Library/Caches/com.apple.dyld/."
 
-echo "=== 10. Translate standalone Mach-O binaries ==="
-find "$ROOT_MNT" -xdev -type f -size +8k ! -path '*/com.apple.dyld/*' ! -path "$ROOT_MNT/private/var/*" -print0 | \
-  xargs -0 -r -n 128 sudo "$REPO_ROOT/nc-static" macho-apply || true
+echo "=== 10. Translate dyld shared cache (nc-static apply) ==="
+CACHE_DIR="$ROOT_MNT/private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
+MAIN_CACHE="$CACHE_DIR/dyld_shared_cache_arm64e"
+CACHE_OUT="/tmp/nc-static-out"
+sudo rm -rf "$CACHE_OUT"
+mkdir -p "$CACHE_OUT"
+
+SUB_CACHES=()
+for f in "$CACHE_DIR"/dyld_shared_cache_arm64e.*; do
+  sudo test -f "$f" || continue
+  if sudo head -c 7 "$f" | grep -q '^dyld_v1'; then
+    SUB_CACHES+=("$f")
+  fi
+done
+echo "Translating main cache + ${#SUB_CACHES[@]} subcaches with nc-static apply..."
+sudo "$REPO_ROOT/nc-static" apply "$CACHE_OUT" "$MAIN_CACHE" "${SUB_CACHES[@]}"
+
+echo "Applying MediaServices nop-call fixes..."
+OUT_SUBS=()
+for f in "$CACHE_OUT"/dyld_shared_cache_arm64e.*; do
+  sudo test -f "$f" && sudo head -c 7 "$f" | grep -q '^dyld_v1' && OUT_SUBS+=("$f")
+done
+sudo "$REPO_ROOT/nc-static" nop-call "$CACHE_OUT/dyld_shared_cache_arm64e" "${OUT_SUBS[@]}" -- 0x1ae8593f8 0x1b2571fe0 || echo "WARN: MediaServices NOP 1 skipped"
+sudo "$REPO_ROOT/nc-static" nop-call "$CACHE_OUT/dyld_shared_cache_arm64e" "${OUT_SUBS[@]}" -- 0x1ae85d7f0 0x1b2571ff0 || echo "WARN: MediaServices NOP 2 skipped"
+
+echo "Writing translated dyld shared cache files back in place (preserving hardlinks)..."
+n=0
+for f in "$CACHE_OUT"/dyld_shared_cache_arm64e*; do
+  name=$(basename "$f")
+  dst="$CACHE_DIR/$name"
+  sudo test -f "$dst" || { echo "FATAL: missing cache target $dst" >&2; exit 1; }
+  meta=$(sudo stat -c '%u:%g %a %i' "$dst")
+  sudo dd if="$f" of="$dst" bs=4M conv=notrunc status=none
+  sudo cmp -s "$f" "$dst" || { echo "FATAL: verify failed for $name" >&2; exit 1; }
+  [[ "$(sudo stat -c '%u:%g %a %i' "$dst")" == "$meta" ]] || { echo "FATAL: metadata changed for $name" >&2; exit 1; }
+  n=$((n + 1))
+done
+echo "Translated cache files written in place: $n"
+sudo rm -rf "$CACHE_OUT"
+
+echo "=== 10b. Verify dyld shared cache has 0 convertible words left ==="
+sudo "$REPO_ROOT/nc-static" scan "$MAIN_CACHE" "${SUB_CACHES[@]}" | tail -12
+
+echo "=== 10c. Translate standalone Mach-O binaries & staged_system_apps ==="
+(
+  sudo find "$ROOT_MNT" -xdev -type f -size +8k ! -path '*/com.apple.dyld/*' ! -path "$ROOT_MNT/private/var/*" -print0
+  if sudo test -d "$ROOT_MNT/private/var/staged_system_apps"; then
+    sudo find "$ROOT_MNT/private/var/staged_system_apps" -xdev -type f -size +8k -print0
+  fi
+) | xargs -0 -r -n 128 sudo "$REPO_ROOT/nc-static" macho-apply || true
 
 echo "=== 11. Clean unmount and fsck ==="
 sync

@@ -307,7 +307,9 @@ def main():
         'ShouldRunDiagnosticsMiniBuddy', 'ShouldRunHSA2MiniBuddy',
         'ShouldRunKeychainSyncMiniBuddy', 'ShouldRunMesaMiniBuddy',
         'ShouldRunPaymentMiniBuddy', 'ShouldRunStandardMiniBuddy', 'SilentICDPUpgrade')})
-    root.pref('com.apple.springboard', {'MCForceShowCloudConfigurationUI': False})
+    root.pref('com.apple.springboard', {
+        'MCForceShowCloudConfigurationUI': False,
+        'BKNoWatchdogs': True})
     root.pref('com.apple.managedconfiguration.notbackedup', {
         'LockdownActivationIndicatesCloudConfigurationAvailable': False})
     ark = activation_ark(root, build, product)
