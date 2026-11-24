@@ -65,11 +65,39 @@ cleanup() {
 }
 trap cleanup EXIT
 
+find_volume_root() {
+  local mnt="$1"
+  # 1. If sbin, System, or Applications exists directly under mnt:
+  if [[ -d "$mnt/sbin" || -d "$mnt/System" || -d "$mnt/Applications" ]]; then
+    echo "$mnt"
+    return
+  fi
+  # 2. Look for child directory containing sbin, System, or Applications:
+  for sub in "$mnt"/*; do
+    if [[ -d "$sub" ]]; then
+      if [[ -d "$sub/sbin" || -d "$sub/System" || -d "$sub/Applications" ]]; then
+        echo "$sub"
+        return
+      fi
+    fi
+  done
+  # 3. Fallback: first directory
+  for sub in "$mnt"/*; do
+    if [[ -d "$sub" ]]; then
+      echo "$sub"
+      return
+    fi
+  done
+  echo "$mnt"
+}
+
 echo "=== 6. Stream, mount & copy AppOS cryptex ==="
 python3 -u "$REPO_ROOT/tools/b1l/stream_dmgs.py" "$DMG_DIR" AppOS
 sudo mkdir -p /tmp/mnt_appos "$ROOT_MNT/private/preboot/Cryptexes/App"
 sudo apfs-fuse -o allow_other "$DMG_DIR/AppOS.dmg" /tmp/mnt_appos
-sudo python3 -I "$REPO_ROOT/tools/b1l/copy-tree.py" /tmp/mnt_appos "$ROOT_MNT/private/preboot/Cryptexes/App"
+src_appos=$(find_volume_root /tmp/mnt_appos)
+echo "AppOS source volume root: $src_appos"
+sudo python3 -I "$REPO_ROOT/tools/b1l/copy-tree.py" "$src_appos" "$ROOT_MNT/private/preboot/Cryptexes/App"
 sudo umount /tmp/mnt_appos
 rm -f "$DMG_DIR/AppOS.dmg"
 echo "AppOS copied successfully."
@@ -78,7 +106,9 @@ echo "=== 7. Stream, decrypt, mount & copy SystemOS cryptex ==="
 python3 -u "$REPO_ROOT/tools/b1l/stream_dmgs.py" "$DMG_DIR" SystemOS
 sudo mkdir -p /tmp/mnt_sysos "$ROOT_MNT/private/preboot/Cryptexes/OS"
 sudo apfs-fuse -o allow_other "$DMG_DIR/SystemOS.dmg" /tmp/mnt_sysos
-sudo python3 -I "$REPO_ROOT/tools/b1l/copy-tree.py" /tmp/mnt_sysos "$ROOT_MNT/private/preboot/Cryptexes/OS"
+src_sysos=$(find_volume_root /tmp/mnt_sysos)
+echo "SystemOS source volume root: $src_sysos"
+sudo python3 -I "$REPO_ROOT/tools/b1l/copy-tree.py" "$src_sysos" "$ROOT_MNT/private/preboot/Cryptexes/OS"
 sudo umount /tmp/mnt_sysos
 rm -f "$DMG_DIR/SystemOS.dmg"
 echo "SystemOS copied successfully."
@@ -87,15 +117,36 @@ echo "=== 8. Stream, decrypt, mount & copy OS root ==="
 python3 -u "$REPO_ROOT/tools/b1l/stream_dmgs.py" "$DMG_DIR" OS
 sudo mkdir -p /tmp/mnt_os
 sudo apfs-fuse -o allow_other "$DMG_DIR/OS.dmg" /tmp/mnt_os
-sudo python3 -I "$REPO_ROOT/tools/b1l/copy-tree.py" /tmp/mnt_os "$ROOT_MNT"
+src_os=$(find_volume_root /tmp/mnt_os)
+echo "OS source volume root: $src_os"
+sudo python3 -I "$REPO_ROOT/tools/b1l/copy-tree.py" "$src_os" "$ROOT_MNT"
 sudo umount /tmp/mnt_os
 rm -f "$DMG_DIR/OS.dmg"
 echo "OS root copied successfully."
+
+echo "=== Verifying filesystem layout ==="
+if [[ ! -x "$ROOT_MNT/sbin/launchd" ]]; then
+  echo "FATAL ERROR: $ROOT_MNT/sbin/launchd does not exist or is not executable!" >&2
+  ls -la "$ROOT_MNT"
+  exit 1
+fi
+if [[ ! -d "$ROOT_MNT/private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld" ]]; then
+  echo "FATAL ERROR: Cryptexes/OS dyld cache directory missing at $ROOT_MNT/private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld!" >&2
+  ls -la "$ROOT_MNT/private/preboot/Cryptexes/OS"
+  exit 1
+fi
+echo "Verified: /sbin/launchd and Cryptexes layout are in place."
 
 echo "=== 9. Prepare iOS root configuration ==="
 sudo python3 -I "$REPO_ROOT/scripts/prepare-ios-root.py" "$ROOT_MNT" --dry-run
 sudo python3 -I "$REPO_ROOT/scripts/prepare-ios-root.py" "$ROOT_MNT" --report "$OUT_DIR/prepare-report.json"
 sudo python3 -I "$REPO_ROOT/scripts/prepare-ios-root.py" "$ROOT_MNT" --verify
+
+if [[ ! -f "$ROOT_MNT/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e" ]]; then
+  echo "FATAL ERROR: Cryptex fallback link for dyld_shared_cache_arm64e missing at $ROOT_MNT/System/Library/Caches/com.apple.dyld/!" >&2
+  exit 1
+fi
+echo "Verified: Cryptex links created successfully in /System/Library/Caches/com.apple.dyld/."
 
 echo "=== 10. Translate standalone Mach-O binaries ==="
 find "$ROOT_MNT" -xdev -type f -size +8k ! -path '*/com.apple.dyld/*' ! -path "$ROOT_MNT/private/var/*" -print0 | \
