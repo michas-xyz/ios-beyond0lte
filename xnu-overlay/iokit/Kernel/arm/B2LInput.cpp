@@ -69,6 +69,19 @@ class B2LInput : public IOService {
             IOLog("B2L DIAG FAIL: cmd=0x%x rd=%d n=%u at=%u ctrl=0x%x int=0x%x err=0x%x tr=0x%x fifo=0x%x addr=0x%x fs1=0x%x fs2=0x%x\n",
                 lastFailCmd,lastFailRead,lastFailBytes,lastFailDone,lastFailCtrl,lastFailInt,lastFailErr,lastFailTrans,lastFailFifo,lastFailAddr,lastFailFs1,lastFailFs2);
     }
+    void logUserClient(int phase){
+        if(phase==0){
+            IOLog("B2L DIAG EFI: ver=%llu loc=0x%llx init=0x%llx probe=0x%llx rst=0x%llx fn=0x%llx ptr=0x%llx dvdd=0x%llx avdd=0x%llx boot=0x%llx usi=0x%llx tx=%llu fail=%llu\n",
+                handoff[0],handoff[1],handoff[2],handoff[3],handoff[4],handoff[5],handoff[6],handoff[7],handoff[8],handoff[9],handoff[14],handoff[20],handoff[21]);
+            IOLog("B2L DIAG HO: fs1=0x%x fs2=0x%x fs3=0x%x sla=0x%x ctrl=0x%x int=0x%llx err=0x%llx tr=0x%llx fifo=0x%llx\n",
+                hoFs1,hoFs2,hoFs3,hoSla,hoCtrl,handoff[16],handoff[17],handoff[18],handoff[19]);
+            if(haveLastFail)
+                IOLog("B2L DIAG FAIL: cmd=0x%x rd=%d n=%u at=%u ctrl=0x%x int=0x%x err=0x%x tr=0x%x fifo=0x%x addr=0x%x fs1=0x%x fs2=0x%x\n",
+                    lastFailCmd,lastFailRead,lastFailBytes,lastFailDone,lastFailCtrl,lastFailInt,lastFailErr,lastFailTrans,lastFailFifo,lastFailAddr,lastFailFs1,lastFailFs2);
+        }
+        IOLog("B2L DIAG PERF: sec=%llu polls=%llu wire=%llu upd=%llu bulk=%llu tfail=%llu en=%d att=%u pend=%d lcmd=0x%x now_fs1=0x%x now_fs2=0x%x now_ctrl=0x%x\n",
+            uptimeUS()/1000000,pollCount,eventCount,updateCount,bulkCount,transferFailures,touch,initAttempts,initPending,lastCommand,i2c?r(0x60):0,i2c?r(0x64):0,i2c?r(0):0);
+    }
     void noteTransfer(uint64_t begin){
         uint64_t elapsed=uptimeUS()-begin;
         transferTimeUS+=elapsed;
@@ -192,6 +205,8 @@ bool B2LInput::start(IOService *provider){
     if(!timer||loop->addEventSource(timer)!=kIOReturnSuccess)return false;
     timer->setTimeoutMS(20);registerService();
     IOLog("B2L INPUT: GPIO GPA0.3/4/6 GPA2.4; active-low; Bixby=Home; sec_ts=%s\n",touch?"ready":"unavailable");
+    extern B2LInput *gB2lInputInstance;
+    gB2lInputInstance=this;
     return true;
 }
 void B2LInput::poll(OSObject *owner,IOTimerEventSource *sender){
@@ -265,8 +280,12 @@ void B2LInput::poll(OSObject *owner,IOTimerEventSource *sender){
     }
     sender->setTimeoutMS(20);
 }
-void B2LInput::stop(IOService *p){if(timer)timer->cancelTimeout();if(i2c)quiesce();IOService::stop(p);}
+B2LInput *gB2lInputInstance = NULL;
+void B2LInput::stop(IOService *p){if(gB2lInputInstance==this)gB2lInputInstance=NULL;if(timer)timer->cancelTimeout();if(i2c)quiesce();IOService::stop(p);}
 void B2LInput::free(){
     if(timer&&loop)loop->removeEventSource(timer);OSSafeReleaseNULL(timer);OSSafeReleaseNULL(loop);
     OSSafeReleaseNULL(gpioMap);OSSafeReleaseNULL(i2cMap);OSSafeReleaseNULL(gpioDesc);OSSafeReleaseNULL(i2cDesc);IOService::free();
+}
+extern "C" void b2l_input_log_diag(int phase){
+    if(gB2lInputInstance)gB2lInputInstance->logUserClient(phase);
 }

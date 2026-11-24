@@ -31,6 +31,8 @@
 #include "IOHIDUsageTables.h"
 
 extern "C" uint64_t mach_absolute_time(void);
+extern "C" void b2l_input_log_diag(int phase);
+static unsigned gB2lTouchDownCount;
 
 /* One open client: the user client and its event callback. */
 class IOHIDEventServiceClient : public OSObject {
@@ -129,6 +131,9 @@ IOHIDEventService::open(IOService *client, IOOptionBits options, void *context, 
 	}
 	OSSafeReleaseNULL(data);
 	IOLog("B2L HID: %s open by %s -> %d\n", getName(), client ? client->getName() : "?", ok);
+	if (getProductID() == 2) {
+		b2l_input_log_diag(0);
+	}
 	return ok;
 }
 
@@ -244,6 +249,14 @@ IOReturn
 IOHIDEventService::setProperties(OSObject *properties)
 {
 	/* The event system pushes its settings here; nothing to configure. */
+	if (getProductID() == 2) {
+		static unsigned setPropCount;
+		if (setPropCount < 8) {
+			++setPropCount;
+			IOLog("B2L HID SETPROP: n=%u tdown=%u\n", setPropCount, gB2lTouchDownCount);
+			b2l_input_log_diag(1);
+		}
+	}
 	return OSDynamicCast(OSDictionary, properties) ? kIOReturnSuccess : kIOReturnBadArgument;
 }
 
@@ -484,6 +497,7 @@ B2LHIDTouch::touch(int finger, bool down, int x, int y)
 		return;
 	}
 	if (!was && down) {
+		gB2lTouchDownCount++;
 		fEdge[finger] = b2l_touch_edge(x, y);
 	}
 
