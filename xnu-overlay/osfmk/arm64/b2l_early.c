@@ -42,16 +42,12 @@ b2l_newline(void)
 	b2l_clear_row(b2l_row + 1 < b2l_rows ? b2l_row + 1 : b2l_panic_floor);
 }
 
-extern boolean_t ml_set_interrupts_enabled(boolean_t enable);
-
 static volatile unsigned b2l_console_owner = 0;
 static volatile unsigned b2l_console_depth = 0;
-static volatile boolean_t b2l_console_istate = FALSE;
 
 static void
 b2l_console_acquire(void)
 {
-	boolean_t istate = ml_set_interrupts_enabled(FALSE);
 	unsigned cpu = b2l_console_cpu();
 	if (__atomic_load_n(&b2l_console_owner, __ATOMIC_ACQUIRE) == cpu) {
 		b2l_console_depth++;
@@ -62,17 +58,15 @@ b2l_console_acquire(void)
 		unsigned expected = 0;
 		if (__atomic_compare_exchange_n(&b2l_console_owner, &expected, cpu, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
 			b2l_console_depth = 1;
-			b2l_console_istate = istate;
 			return;
 		}
 #if defined(__arm64__) || defined(__aarch64__)
 		__builtin_arm_yield();
 #endif
-		if (++spins > 20000000) {
+		if (++spins > 5000000) {
 			/* Forceful recovery: prevent permanent system hang if a core halts */
 			__atomic_store_n(&b2l_console_owner, cpu, __ATOMIC_RELEASE);
 			b2l_console_depth = 1;
-			b2l_console_istate = istate;
 			return;
 		}
 	}
@@ -83,9 +77,7 @@ b2l_console_release(void)
 {
 	if (b2l_console_depth > 0) {
 		if (--b2l_console_depth == 0) {
-			boolean_t istate = b2l_console_istate;
 			__atomic_store_n(&b2l_console_owner, 0, __ATOMIC_RELEASE);
-			ml_set_interrupts_enabled(istate);
 		}
 	}
 }
