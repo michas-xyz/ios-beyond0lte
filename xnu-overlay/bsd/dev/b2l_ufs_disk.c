@@ -12,6 +12,7 @@
 #include <sys/proc.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
+#include <kern/kalloc.h>
 #include <kern/locks.h>
 #include <libkern/libkern.h>
 #include <pexpert/pexpert.h>
