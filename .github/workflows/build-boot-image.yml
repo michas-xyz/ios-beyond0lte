@@ -5,7 +5,10 @@ on:
     branches: [ main, master ]
     paths-ignore:
       - '.github/workflows/build-real-ios-root.yml'
+      - '.github/workflows/build-metal-driver.yml'
       - 'scripts/build-root-*'
+      - 'scripts/build-mesa.sh'
+      - 'scripts/build-metal-*'
       - 'tools/b1l/stream_dmgs.py'
       - 'tools/b1l/aea_decrypt.py'
       - 'auto_deploy_root.py'
@@ -13,7 +16,10 @@ on:
     branches: [ main, master ]
     paths-ignore:
       - '.github/workflows/build-real-ios-root.yml'
+      - '.github/workflows/build-metal-driver.yml'
       - 'scripts/build-root-*'
+      - 'scripts/build-mesa.sh'
+      - 'scripts/build-metal-*'
       - 'tools/b1l/stream_dmgs.py'
       - 'tools/b1l/aea_decrypt.py'
       - 'auto_deploy_root.py'
