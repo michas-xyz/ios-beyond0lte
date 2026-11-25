@@ -14,7 +14,7 @@ B=${MESA_BUILD:-$HOME/Developer/s10-port/build-mesa}
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 CC=$(xcrun --sdk iphoneos -f clang)
 CXX=$(xcrun --sdk iphoneos -f clang++)
-TARGET=arm64e-apple-ios26.0
+TARGET=arm64e-apple-ios${B2L_IOS_TARGET:-$(xcrun --sdk iphoneos --show-sdk-version)}
 mkdir -p "$B/out"; cd "$B"
 PATCHES=$(cat "$REF"/tools/mesa/*.patch | shasum -a 256 | cut -d' ' -f1)
 if [ ! -d mesa-$VERSION ] || [ "$(cat mesa-$VERSION/.b2l-patches 2>/dev/null)" != "$PATCHES" ]; then
@@ -40,7 +40,7 @@ grep -q b2l_metal_core.c mesa-$VERSION/src/gallium/targets/osmesa/meson.build ||
 	sed -i '' "s/  'osmesa_target.c',/  'osmesa_target.c', 'b2l_metal_core.c',/" mesa-$VERSION/src/gallium/targets/osmesa/meson.build
 if [ ! -x venv/bin/python3 ]; then
 	python3 -m venv venv
-	venv/bin/pip -q install mako pyyaml packaging
+	venv/bin/pip -q install mako pyyaml packaging meson ninja
 fi
 export PATH=$B/venv/bin:$HOME/Developer/tools/mamba/envs/s10/bin:$PATH
 # B1L-0075: -fno-ptrauth-returns. The Exynos 9820 has no PAC, so every signed return (retab) of an arm64e function

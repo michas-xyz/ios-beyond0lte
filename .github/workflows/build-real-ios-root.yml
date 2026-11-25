@@ -5,7 +5,8 @@ on:
   push:
     paths:
       - '.github/workflows/build-real-ios-root.yml'
-      - 'scripts/**'
+      - 'scripts/build-root-*'
+      - 'scripts/prepare-ios-root.py'
       - 'tools/b1l/**'
 
 jobs:

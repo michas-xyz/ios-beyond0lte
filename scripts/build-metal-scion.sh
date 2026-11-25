@@ -7,16 +7,17 @@
 set -euo pipefail
 V=${V:-b2l-metal-v7}
 R=$(cd "$(dirname "$0")/.." && pwd)
-O=~/Developer/s10-port/build-metal/$V
+O=${METAL_OUT:-$HOME/Developer/s10-port/build-metal/$V}
 T=$O.src
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-CC="xcrun --sdk iphoneos clang -target arm64e-apple-ios26.0 -isysroot $SDK -O2 -fno-ptrauth-returns -fno-ptrauth-calls -Wno-deprecated-declarations -Wno-unused"   # B1L-0075/0076: no signed returns or calls (no PAC on the Exynos; the kernel accepts unsigned pointers)
-M=${MESA_BUILD:-$HOME/Developer/s10-port/build-mesa}/build-softpipe-panfrost/src/gallium/targets/hakiosair/libhakiosair.dylib
+CC="xcrun --sdk iphoneos clang -target arm64e-apple-ios${B2L_IOS_TARGET:-$(xcrun --sdk iphoneos --show-sdk-version)} -isysroot $SDK -O2 -fno-ptrauth-returns -fno-ptrauth-calls -Wno-deprecated-declarations -Wno-unused"   # B1L-0075/0076: no signed returns or calls (no PAC on the Exynos; the kernel accepts unsigned pointers)
+M=${MESA_LIB:-${MESA_BUILD:-$HOME/Developer/s10-port/build-mesa}/build-softpipe-panfrost/src/gallium/targets/hakiosair/libhakiosair.dylib}
 rm -rf "$O" "$T"; mkdir -p "$O" "$T"
 for f in "$R"/userspace/metal/scion/*.m "$R"/userspace/metal/scion/*.h; do
 	sed "s#/redwood/lib/#/usr/local/lib/$V/#g" "$f" > "$T/$(basename "$f")"
 done
 cp "$M" "$O/libhakiosair.dylib"
+"$(xcrun -f strip)" -x "$O/libhakiosair.dylib"
 /usr/bin/install_name_tool -id /usr/local/lib/$V/libhakiosair.dylib "$O/libhakiosair.dylib" 2>/dev/null || true
 $CC -dynamiclib -install_name /usr/local/lib/$V/libhakiosmetal.dylib -I"$T" \
 	-framework Foundation -framework IOKit -framework Metal -framework IOSurface -lobjc \

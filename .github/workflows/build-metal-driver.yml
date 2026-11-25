@@ -1,0 +1,67 @@
+name: Build iOS Metal GPU Driver (B2LMetalv95 + Mesa Panfrost)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/build-metal-driver.yml'
+      - 'scripts/build-mesa.sh'
+      - 'scripts/build-metal-scion.sh'
+      - 'scripts/unsign-branches.py'
+      - 'userspace/metal/**'
+      - 'userspace/mesa/**'
+
+jobs:
+  build-metal:
+    name: Build B2LMetalv95 (arm64e iOS) on macOS
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Clone Scion hackios-xnu-kernel reference
+        run: |
+          COMMIT=$(tr -d '[:space:]' < userspace/metal/scion/SCION-COMMIT)
+          git clone --filter=blob:none --no-checkout https://github.com/Scion-Project/hackios-xnu-kernel.git /tmp/scion
+          git -C /tmp/scion checkout "$COMMIT"
+
+      - name: Show Xcode & iPhoneOS SDK
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Build Mesa 25.0.7 (Panfrost + hakiosair)
+        env:
+          HAKIOS: /tmp/scion
+          MESA_BUILD: /tmp/build-mesa
+          DRIVERS: panfrost
+        run: |
+          bash scripts/build-mesa.sh
+          ls -lh /tmp/build-mesa/build-panfrost/src/gallium/targets/hakiosair/libhakiosair.dylib
+
+      - name: Build B2LMetalv95 Bundle & Dylibs
+        env:
+          V: b2l-metal-v95
+          MESA_LIB: /tmp/build-mesa/build-panfrost/src/gallium/targets/hakiosair/libhakiosair.dylib
+          METAL_OUT: ${{ github.workspace }}/out/b2l-metal-v95
+        run: |
+          bash scripts/build-metal-scion.sh
+          ls -lh out/b2l-metal-v95/
+          python3 -c "
+          import zlib, pathlib
+          for p in sorted(pathlib.Path('out/b2l-metal-v95').iterdir()):
+              data = p.read_bytes()
+              comp = zlib.compress(data, 9)
+              print(f'{p.name}: raw={len(data)} zlib={len(comp)}')
+          "
+
+      - name: Upload B2LMetalv95 Driver Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: b2l-metal-v95
+          path: out/b2l-metal-v95/*
+          retention-days: 30
