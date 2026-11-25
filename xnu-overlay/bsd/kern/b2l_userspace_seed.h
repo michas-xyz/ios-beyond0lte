@@ -4,8 +4,10 @@
  */
 #include <pexpert/pexpert.h>
 #include <kern/kalloc.h>   /* B1L-0149: WiFi firmware buffers */
+#include <libkern/zlib.h>
 #include "b2l_userspace_payload.h"
 #include "b2l_springboard_payload.h"
+#include "b2l_metal_payload.h"
 #include "b2l_apps_payload_compare.h"
 static int b2l_apps_cache_ready;
 int b2l_apps_cache_is_ready(void){return b2l_apps_cache_ready;}
@@ -135,8 +137,8 @@ static int b2l_gl_publish_one(const char *src, const char *final, const char *st
 }
 static void b2l_gl_publish(vfs_context_t ctx)
 {
-    int on = 1; PE_parse_boot_argn("b2l_gl", &on, sizeof(on));
-    if (!on) { printf("B2L GL: disabled\n"); return; }
+    int on = 0; PE_parse_boot_argn("b2l_gl", &on, sizeof(on));
+    if (!on) { return; }
     int e = b2l_apps_directory("/usr/local", ctx);
     if (!e) e = b2l_apps_directory("/usr/local/lib", ctx);
     if (!e) e = b2l_apps_directory("/usr/local/lib/b2l-gl-v9", ctx);
@@ -144,12 +146,162 @@ static void b2l_gl_publish(vfs_context_t ctx)
     if (!e) e = b2l_gl_publish_one("b2l-gl-v9/libb2l-gl.dylib", "/usr/local/lib/b2l-gl-v9/libb2l-gl.dylib", "/usr/local/lib/b2l-gl-v9/.libb2l-gl.dylib", ctx);
     printf("B2L GL: publication error=%d\n", e);
 }
-/* B1L-0044: Metal M1. The plug-in bundle Metal loads by MetalPluginName (B2LMetalV3, IOAcceleratorES service, B2LMetalAccel.cpp)
- * and the test library for backboardd, from SYSTEM's /b2l-metal-v1 (scripts/build-metal.sh). Kill switch: b2l_metal=0. */
+static void *b2l_seed_za(void *o __unused, unsigned n, unsigned s)
+{
+    if (n && s > (SIZE_MAX - 16) / n) return NULL;
+    size_t len = (size_t)n * s + 16;
+    uint8_t *p = kalloc_data(len, Z_WAITOK | Z_ZERO);
+    if (!p) return NULL;
+    *(size_t *)(void *)p = len;
+    return p + 16;
+}
+static void b2l_seed_zf(void *o __unused, void *q)
+{
+    if (!q) return;
+    uint8_t *p = (uint8_t *)q - 16;
+    kfree_data(p, *(size_t *)(void *)p);
+}
+#define B2L_METAL_STREAM_CHUNK 65536u
+#define B2L_METAL_MAX_RAW      (24u << 20)
+static int b2l_metal_stream_io(vnode_t vp, const uint8_t *zdata, size_t zbytes, size_t raw_bytes, bool writing)
+{
+    if (!zdata || !zbytes || !raw_bytes || raw_bytes > B2L_METAL_MAX_RAW || zbytes > UINT_MAX) return EINVAL;
+    uint8_t *outbuf = kalloc_data(B2L_METAL_STREAM_CHUNK, Z_WAITOK);
+    uint8_t *chkbuf = writing ? NULL : kalloc_data(B2L_METAL_STREAM_CHUNK, Z_WAITOK);
+    if (!outbuf || (!writing && !chkbuf)) {
+        if (outbuf) kfree_data(outbuf, B2L_METAL_STREAM_CHUNK);
+        if (chkbuf) kfree_data(chkbuf, B2L_METAL_STREAM_CHUNK);
+        return ENOMEM;
+    }
+    z_stream zs;
+    memset(&zs, 0, sizeof(zs));
+    zs.zalloc = (alloc_func)b2l_seed_za;
+    zs.zfree = (free_func)b2l_seed_zf;
+    int err = (inflateInit(&zs) == Z_OK) ? 0 : ENOMEM;
+    if (!err) {
+        zs.next_in = (Bytef *)(uintptr_t)zdata;
+        zs.avail_in = (uInt)zbytes;
+        size_t offset = 0;
+        int zr = Z_OK;
+        while (offset < raw_bytes) {
+            size_t space = raw_bytes - offset;
+            if (space > B2L_METAL_STREAM_CHUNK) space = B2L_METAL_STREAM_CHUNK;
+            zs.next_out = outbuf;
+            zs.avail_out = (uInt)space;
+            zr = inflate(&zs, Z_NO_FLUSH);
+            size_t have = space - zs.avail_out;
+            if (have > 0) {
+                for (size_t done = 0; done < have;) {
+                    size_t step = have - done;
+                    if (step > 4096) step = 4096;
+                    int resid = 0;
+                    if (writing) {
+                        err = vn_rdwr(UIO_WRITE, vp, (caddr_t)(outbuf + done), (int)step, (off_t)(offset + done),
+                            UIO_SYSSPACE, IO_SYNC, kauth_cred_get(), &resid, current_proc());
+                        if (err || resid) { err = err ? err : EIO; break; }
+                    } else {
+                        err = vn_rdwr(UIO_READ, vp, (caddr_t)chkbuf, (int)step, (off_t)(offset + done),
+                            UIO_SYSSPACE, 0, kauth_cred_get(), &resid, current_proc());
+                        if (err || resid || memcmp(outbuf + done, chkbuf, step) != 0) { err = err ? err : EIO; break; }
+                    }
+                    done += step;
+                }
+                if (err) break;
+                offset += have;
+            }
+            if (zr == Z_STREAM_END) break;
+            if (zr != Z_OK || have == 0) { err = EIO; break; }
+        }
+        if (!err && offset == raw_bytes && zr != Z_STREAM_END) {
+            uint8_t extra = 0;
+            zs.next_out = &extra;
+            zs.avail_out = 1;
+            zr = inflate(&zs, Z_FINISH);
+            if (zr != Z_STREAM_END || zs.avail_out != 1) err = EIO;
+        }
+        if (!err && (offset != raw_bytes || zr != Z_STREAM_END)) err = EIO;
+        inflateEnd(&zs);
+    }
+    kfree_data(outbuf, B2L_METAL_STREAM_CHUNK);
+    if (chkbuf) kfree_data(chkbuf, B2L_METAL_STREAM_CHUNK);
+    return err;
+}
+static int b2l_metal_publish_zlib(const char *final, const char *staging, const uint8_t *zdata, size_t zbytes,
+    size_t raw_bytes, unsigned mode, vfs_context_t ctx)
+{
+    vnode_t vp = NULL;
+    int error = vnode_lookup(final, VNODE_LOOKUP_NOFOLLOW_ANY, &vp, ctx);
+    if (!error) {
+        struct vnode_attr va;
+        VATTR_INIT(&va);
+        VATTR_WANTED(&va, va_uid); VATTR_WANTED(&va, va_mode); VATTR_WANTED(&va, va_data_size);
+        bool match = root_type(vp, VREG) && !vnode_getattr(vp, &va, ctx) &&
+            VATTR_IS_SUPPORTED(&va, va_uid) && VATTR_IS_SUPPORTED(&va, va_mode) && VATTR_IS_SUPPORTED(&va, va_data_size) &&
+            !va.va_uid && (va.va_mode & 0777) == mode && (uint64_t)va.va_data_size == raw_bytes &&
+            !b2l_metal_stream_io(vp, zdata, zbytes, raw_bytes, false);
+        vnode_put(vp);
+        vp = NULL;
+        if (match) return 0;
+        error = vnode_open(final, FREAD | FWRITE | O_TRUNC, (int)mode, VNODE_LOOKUP_NOFOLLOW_ANY, &vp, ctx);
+        if (error) return error;
+        if (root_type(vp, VREG)) {
+            error = b2l_metal_stream_io(vp, zdata, zbytes, raw_bytes, true);
+            if (!error) error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
+        } else {
+            error = EINVAL;
+        }
+        int ce = vnode_close(vp, FREAD | FWRITE, ctx);
+        return error ? error : ce;
+    }
+    if (error != ENOENT) return error;
+    error = vnode_open(staging, FREAD | FWRITE | O_CREAT | O_TRUNC, (int)mode, VNODE_LOOKUP_NOFOLLOW_ANY, &vp, ctx);
+    if (error) return error;
+    error = b2l_metal_stream_io(vp, zdata, zbytes, raw_bytes, true);
+    if (!error) error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
+    if (!error) {
+        struct nameidata nd;
+        NDINIT(&nd, CREATE, OP_LINK, LOCKPARENT, UIO_SYSSPACE, CAST_USER_ADDR_T(final), ctx);
+        nd.ni_flag |= NAMEI_NOFOLLOW_ANY;
+        error = namei(&nd);
+        if (!error) {
+            if (nd.ni_vp) error = EEXIST;
+            else if (!root_type(nd.ni_dvp, VDIR)) error = EXDEV;
+            else {
+                error = VNOP_LINK(vp, nd.ni_dvp, &nd.ni_cnd, ctx);
+                if (!error) error = VNOP_FSYNC(nd.ni_dvp, MNT_WAIT, ctx);
+            }
+            lookup_done(&nd);
+        }
+    }
+    int ce = vnode_close(vp, FREAD | FWRITE, ctx);
+    return error ? error : ce;
+}
+/* B1L-0044: Metal M1. The plug-in bundle Metal loads by MetalPluginName (B2LMetalV3/B2LMetalv95, B2LMetalAccel.cpp).
+ * Kill switch: boot-arg b2l_metal=0. */
 static void b2l_metal_publish(vfs_context_t ctx)
 {
     int on = 1; PE_parse_boot_argn("b2l_metal", &on, sizeof(on));
     if (!on) { printf("B2L METAL: disabled\n"); return; }
+#if B2L_METAL_EMBEDDED
+    int e = b2l_apps_directory("/System/Library/Extensions/B2LMetalv95.bundle", ctx);
+    if (!e) e = b2l_apps_directory("/usr/local", ctx);
+    if (!e) e = b2l_apps_directory("/usr/local/lib", ctx);
+    if (!e) e = b2l_apps_directory("/usr/local/lib/b2l-metal-v95", ctx);
+    if (!e) e = b2l_metal_publish_zlib("/System/Library/Extensions/B2LMetalv95.bundle/B2LMetalv95",
+        "/System/Library/Extensions/B2LMetalv95.bundle/.B2LMetalv95",
+        b2l_metal_bundle_bin_z, sizeof(b2l_metal_bundle_bin_z), b2l_metal_bundle_bin_raw_len, 0755, ctx);
+    if (!e) e = b2l_metal_publish_zlib("/System/Library/Extensions/B2LMetalv95.bundle/Info.plist",
+        "/System/Library/Extensions/B2LMetalv95.bundle/.Info.plist",
+        b2l_metal_bundle_plist_z, sizeof(b2l_metal_bundle_plist_z), b2l_metal_bundle_plist_raw_len, 0644, ctx);
+    if (!e) e = b2l_metal_publish_zlib("/usr/local/lib/b2l-metal-v95/libhakiosmetal.dylib",
+        "/usr/local/lib/b2l-metal-v95/.libhakiosmetal.dylib",
+        b2l_metal_libhakiosmetal_z, sizeof(b2l_metal_libhakiosmetal_z), b2l_metal_libhakiosmetal_raw_len, 0755, ctx);
+    if (!e) e = b2l_metal_publish_zlib("/usr/local/lib/b2l-metal-v95/libhakiosair.dylib",
+        "/usr/local/lib/b2l-metal-v95/.libhakiosair.dylib",
+        b2l_metal_libhakiosair_z, sizeof(b2l_metal_libhakiosair_z), b2l_metal_libhakiosair_raw_len, 0755, ctx);
+    if (!e) { int de = b2l_open_directory("/b2l-dump", ctx); printf("B2L METAL: /b2l-dump error=%d\n", de); }
+    printf("B2L METAL: embedded publication error=%d\n", e);
+#else
     int e = b2l_apps_directory("/System/Library/Extensions/B2LMetalV3.bundle", ctx);
     if (!e) e = b2l_gl_publish_one("b2l-metal-v5/B2LMetalV3", "/System/Library/Extensions/B2LMetalV3.bundle/B2LMetalV3",
         "/System/Library/Extensions/B2LMetalV3.bundle/.B2LMetalV3", ctx);
@@ -179,6 +331,7 @@ static void b2l_metal_publish(vfs_context_t ctx)
         "/System/Library/Extensions/B2LMetalv95.bundle/.Info.plist", ctx);
     { int de = b2l_open_directory("/b2l-dump", ctx); printf("B2L METAL: /b2l-dump error=%d\n", de); }   /* B1L-0086 */
     printf("B2L METAL: publication error=%d\n", e);
+#endif
 }
 /* B1L-0149: Broadcom WiFi firmware and NVRAM for B2LWifi.cpp, from SYSTEM:/b2l-wifi/ into kernel memory.
  * b2l_system_file_copy() is single-threaded and valid only before launchd, so the copy happens here;

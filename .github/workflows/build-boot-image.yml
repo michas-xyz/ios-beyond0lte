@@ -7,8 +7,6 @@ on:
       - '.github/workflows/build-real-ios-root.yml'
       - '.github/workflows/build-metal-driver.yml'
       - 'scripts/build-root-*'
-      - 'scripts/build-mesa.sh'
-      - 'scripts/build-metal-*'
       - 'tools/b1l/stream_dmgs.py'
       - 'tools/b1l/aea_decrypt.py'
       - 'auto_deploy_root.py'
@@ -18,8 +16,6 @@ on:
       - '.github/workflows/build-real-ios-root.yml'
       - '.github/workflows/build-metal-driver.yml'
       - 'scripts/build-root-*'
-      - 'scripts/build-mesa.sh'
-      - 'scripts/build-metal-*'
       - 'tools/b1l/stream_dmgs.py'
       - 'tools/b1l/aea_decrypt.py'
       - 'auto_deploy_root.py'
@@ -50,11 +46,55 @@ jobs:
 
       - name: Run S10e Test Suite
         run: |
-          python -m unittest tests.test_b2l_board tests.test_make_board_platform tests.test_memory_profile tests.test_package_boot tests.test_ram_bounds tests.test_extract_firmware
+          python -m unittest tests.test_b2l_board tests.test_make_board_platform tests.test_memory_profile tests.test_package_boot tests.test_ram_bounds tests.test_extract_firmware tests.test_prepare_boot_firmware tests.test_generate_metal_payload
+
+  build-metal:
+    name: Build S10e B2LMetalv95 Driver
+    needs: test
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache B2LMetalv95 Build
+        id: metal-cache
+        uses: actions/cache@v4
+        with:
+          path: out/b2l-metal-v95
+          key: b2l-metal-v95-${{ runner.os }}-${{ hashFiles('userspace/metal/**', 'userspace/mesa/**', 'scripts/build-mesa.sh', 'scripts/build-metal-scion.sh', 'scripts/unsign-branches.py') }}
+
+      - name: Build B2LMetalv95 on Cache Miss
+        if: steps.metal-cache.outputs.cache-hit != 'true'
+        env:
+          HAKIOS: /tmp/scion
+          MESA_BUILD: /tmp/build-mesa
+          V: b2l-metal-v95
+          MESA_LIB: /tmp/build-mesa/build-softpipe-panfrost/src/gallium/targets/hakiosair/libhakiosair.dylib
+          METAL_OUT: ${{ github.workspace }}/out/b2l-metal-v95
+        run: |
+          brew install bison
+          echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
+          export PATH="/opt/homebrew/opt/bison/bin:$PATH"
+          COMMIT=$(tr -d '[:space:]' < userspace/metal/scion/SCION-COMMIT)
+          git clone --filter=blob:none --no-checkout https://github.com/Scion-Project/hackios-xnu-kernel.git /tmp/scion
+          git -C /tmp/scion checkout "$COMMIT"
+          bash scripts/build-mesa.sh
+          bash scripts/build-metal-scion.sh
+
+      - name: Upload B2LMetalv95 Payload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: s10e-b2l-metal-v95
+          path: out/b2l-metal-v95/*
 
   build-xnu:
     name: Build S10e XNU Mach-O Kernel
-    needs: test
+    needs: [test, build-metal]
     runs-on: macos-latest
     env:
       B2L_BOARD: ${{ github.event.inputs.board || 'beyond0lte' }}
@@ -90,9 +130,16 @@ jobs:
         run: |
           bash scripts/fetch-xnu.sh xnu
 
+      - name: Download B2LMetalv95 Driver Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: s10e-b2l-metal-v95
+          path: out/b2l-metal-v95
+
       - name: Prepare XNU with S10e Board Patches & Overlay
         run: |
           bash scripts/prepare-xnu.sh xnu
+          python3 scripts/generate-metal-payload.py --input out/b2l-metal-v95 --output xnu/bsd/kern/b2l_metal_payload.h
           echo "#define B2L_BUILD_EPOCH $(date +%s)" > xnu/iokit/Kernel/arm/b2l_build_epoch.h
           touch xnu/iokit/Kernel/arm/B2LPlatformExpert.cpp
 
