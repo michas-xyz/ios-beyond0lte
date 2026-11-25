@@ -4314,10 +4314,11 @@ b2l_note_pass(HakiosMetalWork *work)
 			return;
 		}
 	}
-	if (nseen < sizeof(seen) / sizeof(seen[0])) {
-		snprintf(seen[nseen], sizeof(seen[nseen]), "%s", line);
-		nseen++;
+	if (nseen >= sizeof(seen) / sizeof(seen[0])) {
+		return;
 	}
+	snprintf(seen[nseen], sizeof(seen[nseen]), "%s", line);
+	nseen++;
 	rw_print("%s\n", line);
 }
 
@@ -4920,7 +4921,7 @@ done:
 	/* B2L (B1L-0109): what this buffer is when QuartzCore's flush block sends this (it died in the [self commit]
 	 * below at B1L-0105..0108, the buffer freed in between) */
 	static unsigned said;
-	if (said < 400) {
+	if (said < 16) {
 		said++;
 		rw_print("B2L CB %p commitAndWait: status %lu held %d retainCount %lu thread %p\n", self,
 			 (unsigned long)_status, (int)_b2lHeld, (unsigned long)[self retainCount], (void *)pthread_self());

@@ -118,7 +118,9 @@ call(unsigned number, void *data, size_t size)
 {
 	size_t returned = size;
 	kern_return_t result = IOConnectCallStructMethod(connection, number, data, size, data, &returned);
-	if (b2l_drm_calls++ < 6 || result != 0)
+	bool expected_busy = (number == DRM_COMMAND_BASE + DRM_PANFROST_WAIT_BO || number == HAKIOS_MALI_WAIT) &&
+		result == kIOReturnTimeout;
+	if (b2l_drm_calls++ < 6 || (result != 0 && !expected_busy))
 		b2l_drm_say("b2l-drm: request %#x (%zu bytes) -> %#x", number, size, result);
 
 	switch (result) {

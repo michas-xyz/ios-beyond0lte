@@ -36,15 +36,29 @@ psay(const char *format, ...)
 @implementation B2LMetalUIDevice
 - (instancetype)initWithAcceleratorPort:(io_service_t)port
 {
-	/* B2L (B1L-0185): the window server, and the processes that draw icons, widgets and Control Center glyphs
-	 * offscreen and get nothing on screen without a GPU (SpringBoard, chronod, iconservicesagent) */
-	static const char *const allowed[] = { "backboardd", "SpringBoard", "chronod", "iconservicesagent" };
+	/* B2L (B1L-0269): expose Mali GPU to backboardd for QuartzCore compositing and Liquid Glass by default.
+	 * SpringBoard/chronod/iconservicesagent hit unimplemented RenderBox buffer-textures and shader phis,
+	 * breaking icons (Calendar, Settings Battery) and stalling the single core. Boot-args b2l_gpu_icons=1
+	 * or b2l_gpu_all=1 reopen GPU access for testing without rebuilding. */
+	static const char *const icon_daemons[] = { "SpringBoard", "chronod", "iconservicesagent" };
 	const char *me = getprogname();
-	bool ok = false;
-	for (unsigned i = 0; me != NULL && i < sizeof(allowed) / sizeof(allowed[0]); i++)
-		ok |= strcmp(me, allowed[i]) == 0;
+	bool ok = me != NULL && strcmp(me, "backboardd") == 0;
+	if (!ok && me != NULL) {
+		char bootargs[512] = "";
+		size_t blen = sizeof(bootargs) - 1;
+		if (sysctlbyname("kern.bootargs", bootargs, &blen, NULL, 0) == 0) {
+			bootargs[blen] = '\0';
+			if (strstr(bootargs, "b2l_gpu_all=1") != NULL) {
+				ok = true;
+			} else if (strstr(bootargs, "b2l_gpu_icons=1") != NULL) {
+				for (unsigned i = 0; i < sizeof(icon_daemons) / sizeof(icon_daemons[0]); i++) {
+					ok |= strcmp(me, icon_daemons[i]) == 0;
+				}
+			}
+		}
+	}
 	if (!ok) {
-		/* not the window server: no device, as the hidden plug-in of B1L-0049. NOT released: -[_MTLDevice dealloc]
+		/* not enabled for GPU: no device, as the hidden plug-in of B1L-0049. NOT released: -[_MTLDevice dealloc]
 		 * on an object _MTLDevice never initialised crashed SpringBoard four times a boot (B1L-0085..0087, EXC_BAD_ACCESS
 		 * in its dealloc, via -[HakiosMetalDevice dealloc]); one unused object a process is the price. */
 		return nil;

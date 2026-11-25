@@ -386,8 +386,11 @@ b2l_surface_layout(B2LSurface *s, OSDictionary *props)
 	if ((s->bytesPerRow & (B2L_SURFACE_ROW_ALIGN - 1)) != 0 && props->getObject("IOSurfacePlaneInfo") == NULL) {
 		char who[32];
 		proc_selfname(who, sizeof(who));
-		/* B1L-0103: SpringBoard too -- it makes the 168x124 'LA08' surface backboardd's compute_average_luma reads */
-		if (strcmp(who, "backboardd") == 0 || strcmp(who, "SpringBoard") == 0) {
+		/* B1L-0103: SpringBoard makes the 168x124 'LA08' surface backboardd's compute_average_luma reads;
+		 * keep 64-byte alignment on backboardd surfaces and SpringBoard 'LA08' luminance surfaces without
+		 * altering strides of SpringBoard's CPU-drawn BGRA bitmaps (e.g. Calendar icon 180x180 at 720 bpr). */
+		if (strcmp(who, "backboardd") == 0 ||
+		    (strcmp(who, "SpringBoard") == 0 && s->pixelFormat == 0x4c413038u)) {
 			s->bytesPerRow = (s->bytesPerRow + B2L_SURFACE_ROW_ALIGN - 1) & ~(uint32_t)(B2L_SURFACE_ROW_ALIGN - 1);
 		}
 	}
