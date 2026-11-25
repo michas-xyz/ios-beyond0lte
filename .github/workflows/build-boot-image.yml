@@ -140,6 +140,8 @@ jobs:
         run: |
           bash scripts/prepare-xnu.sh xnu
           python3 scripts/generate-metal-payload.py --input out/b2l-metal-v95 --output xnu/bsd/kern/b2l_metal_payload.h
+          python3 scripts/build-springboard-dylib.py --output xnu/bsd/kern/b2l_springboard_payload.h
+          python3 scripts/build-bluetool-dylib.py --output xnu/bsd/kern/b2l_bluetool_payload.h
           echo "#define B2L_BUILD_EPOCH $(date +%s)" > xnu/iokit/Kernel/arm/b2l_build_epoch.h
           touch xnu/iokit/Kernel/arm/B2LPlatformExpert.cpp
 

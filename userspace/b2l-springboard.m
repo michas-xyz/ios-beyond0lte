@@ -203,16 +203,66 @@ static void hook_module_caps(void)
     done = YES;
     b2l_log(@"CCSModuleMetadata requiredDeviceCapabilities: arm64e dropped");
 }
+static Class (*vp_was)(id, SEL, id, id);
+static Class vp_override(id self, SEL cmd, id screen, id info)
+{
+    Class orig = vp_was ? vp_was(self, cmd, screen, info) : Nil;
+    NSString *origName = orig ? NSStringFromClass(orig) : @"<nil>";
+    static BOOL logged;
+    if (!orig || [origName rangeOfString:@"Fallback"].location != NSNotFound) {
+        static const char *const candidates[] = {
+            "STUIStatusBarVisualProvider_Split1080",
+            "STUIStatusBarVisualProvider_Split1125",
+            "STUIStatusBarVisualProvider_Split1170",
+            "STUIStatusBarVisualProvider_LegacyPhone",
+            "_UIStatusBarVisualProvider_Split1080",
+            "_UIStatusBarVisualProvider_Split1125",
+            "_UIStatusBarVisualProvider_LegacyPhone",
+        };
+        for (unsigned i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+            Class alt = objc_getClass(candidates[i]);
+            if (alt && alt != orig) {
+                if (!logged) {
+                    logged = YES;
+                    b2l_log([NSString stringWithFormat:@"statusBar visualProvider: %@ -> %s", origName, candidates[i]]);
+                }
+                return alt;
+            }
+        }
+    }
+    if (!logged) {
+        logged = YES;
+        b2l_log([NSString stringWithFormat:@"statusBar visualProvider kept: %@", origName]);
+    }
+    return orig;
+}
+static void hook_status_bar(void)
+{
+    static BOOL done;
+    if (done) return;
+    SEL sel = NSSelectorFromString(@"visualProviderSubclassForScreen:visualProviderInfo:");
+    Class c = objc_getClass("STUIStatusBarVisualProvider_Phone");
+    if (!c) c = objc_getClass("_UIStatusBarVisualProvider_Phone");
+    Method meth = c ? class_getClassMethod(c, sel) : NULL;
+    if (!meth) return;
+    vp_was = (Class (*)(id, SEL, id, id))method_setImplementation(meth, (IMP)vp_override);
+    done = YES;
+    b2l_log([NSString stringWithFormat:@"%@ visualProviderSubclassForScreen: hooked", NSStringFromClass(c)]);
+}
 static void image_added(const struct mach_header *mh, intptr_t slide)
 {
     (void)mh; (void)slide;
     hook_module_caps();
+    hook_status_bar();
 }
 
 __attribute__((constructor)) static void b2l_springboard_init(void)
 {
     b2l_log(@"b2l-springboard-v5 loaded");
     hook_module_caps();
+    hook_status_bar();
     _dyld_register_func_for_add_image(image_added);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ look(); });
+    if ([[[NSBundle mainBundle] bundleIdentifier] isEqualToString:@"com.apple.springboard"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ look(); });
+    }
 }

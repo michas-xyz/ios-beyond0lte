@@ -1,15 +1,16 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
-/* b2l-bluetool-v1.dylib: stand-in for Apple's BlueTool on the S10 (Bluetooth step 3,
- * docs/bluetooth/plan.md section 6). The kernel (B2LBluetooth.cpp) already powers the
- * BCM4375, loads its patch RAM and sets the address, so the only job left for BlueTool
- * is to answer bluetoothd's XPC requests on com.apple.BlueTool:
- *   {kMsgId: "RunBuiltinScript", kMsgArgs: {script: boot|init|deepsleep, ...}}
- * with a reply {result: 0, firmware, manufacturer} (keys read in bluetoothd 23G90,
- * reply block at 0x10040076c). "boot" and "init" wait until the kernel's H4 control
- * exists (= chip up), everything else answers 0, as ios-pipa's stand-in does.
- * Inserted into /usr/sbin/BlueTool by the kernel's exec hook (b2l_exec_bluetooth.h);
- * BlueTool's main() calls getopt("c:hf:F:R") first, which is where we take over. */
+/* b2l-bluetool-v1.dylib:
+ * 1) Stand-in for Apple's BlueTool (/usr/sbin/BlueTool) on com.apple.BlueTool XPC.
+ * 2) Platform identity shim for /usr/sbin/bluetoothd 23G90 (DA7ADF00-...):
+ *    answers true to MGIsDeviceOneOfType at the platform 0x16 creation site
+ *    so bluetoothd does not crash on Unknown platform 0xffffffff at +0x31c.
+ */
 #include <dispatch/dispatch.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <xpc/xpc.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -38,6 +39,8 @@ _Static_assert(CTLIOCGINFO == 0xc0644e03, "CTLIOCGINFO as used by bluetoothd 0x1
 /* Not marked available on iOS in the SDK headers; present in libxpc. */
 extern xpc_connection_t b2l_xpc_mach_service(const char *, dispatch_queue_t, uint64_t)
     __asm__("_xpc_connection_create_mach_service");
+
+extern bool MGIsDeviceOneOfType(const int *types);
 
 static int log_fd = -1;
 
@@ -131,7 +134,49 @@ static int b2l_getopt(int argc, char *const argv[], const char *optstring)
 	return getopt(argc, argv, optstring);
 }
 
+/* Check LC_UUID of image 0 matches bluetoothd 23G90 (DA7ADF00-04FA-3EE0-8782-E336E0982712). */
+static uintptr_t bluetoothd_base_if_matched(void)
+{
+	static int checked;
+	static uintptr_t base;
+	if (checked) return base;
+	checked = 1;
+	const struct mach_header_64 *mh = (const struct mach_header_64 *)_dyld_get_image_header(0);
+	if (!mh || mh->magic != MH_MAGIC_64) return 0;
+	static const uint8_t want[16] = {
+		0xda, 0x7a, 0xdf, 0x00, 0x04, 0xfa, 0x3e, 0xe0,
+		0x87, 0x82, 0xe3, 0x36, 0xe0, 0x98, 0x27, 0x12
+	};
+	const uint8_t *p = (const uint8_t *)(mh + 1);
+	for (uint32_t i = 0; i < mh->ncmds; i++) {
+		const struct load_command *lc = (const struct load_command *)p;
+		if (lc->cmd == LC_UUID && lc->cmdsize >= sizeof(struct uuid_command)) {
+			const struct uuid_command *uc = (const struct uuid_command *)lc;
+			if (!memcmp(uc->uuid, want, 16)) {
+				base = (uintptr_t)mh;
+			}
+			break;
+		}
+		p += lc->cmdsize;
+	}
+	return base;
+}
+
+static bool b2l_MGIsDeviceOneOfType(const int *types)
+{
+	uintptr_t mh = bluetoothd_base_if_matched();
+	if (mh) {
+		uintptr_t ret = (uintptr_t)__builtin_return_address(0) - mh;
+		/* Platform 0x16 call site in bluetoothd 23G90 (DA7ADF00-...) */
+		if (ret == 0x432160) {
+			return true;
+		}
+	}
+	return MGIsDeviceOneOfType(types);
+}
+
 __attribute__((used, section("__DATA,__interpose")))
 static const struct { const void *replacement, *replacee; } b2l_interpose[] = {
 	{ (const void *)b2l_getopt, (const void *)getopt },
+	{ (const void *)b2l_MGIsDeviceOneOfType, (const void *)MGIsDeviceOneOfType },
 };

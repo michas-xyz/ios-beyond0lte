@@ -6,6 +6,7 @@ import argparse,hashlib,subprocess,tempfile,struct
 r=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
 sdk=subprocess.check_output(['xcrun','--sdk','iphoneos','--show-sdk-path'],text=True).strip()
+sdk_ver=subprocess.check_output(['xcrun','--sdk','iphoneos','--show-sdk-version'],text=True).strip()
 with tempfile.TemporaryDirectory(prefix='b2l-sb-') as td:
  # B1L-0125: the owner's photo, cropped to the panel (1440x3040, centred: the surplus goes at the top and bottom)
  # and re-encoded as an 8-bit sRGB JPEG, linked into the library as __DATA,__b2l_wall
@@ -18,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix='b2l-sb-') as td:
  else:
   print('wallpaper: none (the generated picture stays)')
  lib=Path(td)/'b2l-springboard-v5.dylib'
- subprocess.run(['xcrun','--sdk','iphoneos','clang','-target','arm64e-apple-ios26.0','-isysroot',sdk,'-Os','-fobjc-arc','-Wall','-Wextra','-Werror','-Wno-deprecated-declarations',
+ subprocess.run(['xcrun','--sdk','iphoneos','clang','-target',f'arm64e-apple-ios{sdk_ver}','-isysroot',sdk,'-Os','-fobjc-arc','-Wall','-Wextra','-Werror','-Wno-deprecated-declarations',
   '-dynamiclib','-install_name','/usr/local/lib/b2l-springboard-v5.dylib','-framework','Foundation','-framework','UIKit','-framework','CoreGraphics',str(r/'userspace/b2l-springboard.m'),'-o',str(lib)]+wallargs,check=True)
  subprocess.run(['/usr/bin/codesign','--force','--sign','-','--identifier','dev.b2l.springboard',str(lib)],check=True)
  subprocess.run(['/usr/bin/codesign','--verify',str(lib)],check=True)

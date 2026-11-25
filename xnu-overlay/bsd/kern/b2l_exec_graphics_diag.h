@@ -217,11 +217,14 @@ b2l_exec_count_backboardd(struct image_params *imgp)
 	printf("B2L METAL: backboardd start %d\n", n);
 	if (n == 3) b2l_metal_ui_fallback();
 }
+#include "b2l_exec_bluetooth.h"
 static int
 b2l_exec_graphics_diag(struct image_params *imgp, int pointer_size)
 {
 	b2l_exec_count_backboardd(imgp);
 	int render_error = b2l_exec_block_loops(imgp);
+	if (render_error) return render_error;
+	render_error = b2l_exec_bluetooth(imgp, pointer_size);
 	if (render_error) return render_error;
 	render_error = b2l_exec_render_env(imgp, pointer_size);
 	if (render_error) return render_error;

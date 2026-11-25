@@ -33,12 +33,15 @@
 #if defined(B2L)
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOLocks.h>
 #include <pexpert/pexpert.h>
 #include <pexpert/device_tree.h>
 #include <arm64/b2l_diag.h>
 #include <kern/thread.h>
 #include <kern/clock.h>
 #include <sys/errno.h>
+#include <sys/kern_control.h>
+#include <sys/kpi_mbuf.h>
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 extern "C" {
@@ -67,7 +70,7 @@ bt_hcd_sink(void *, uint64_t off, const void *buf, size_t n)
 extern "C" void
 b2l_bt_fetch(void)
 {
-	int level = 3;
+	int level = 4;
 	PE_parse_boot_argn("b2l_bt", &level, sizeof(level));
 	if (level < 3) {
 		b2l_bt_fw_state = -1;
@@ -173,6 +176,7 @@ class B2LBluetooth : public IOService {
 	int logVersion(const char *when);
 	void logName(const char *when);
 	bool patchram(void);
+	void relayLoop(void);
 	void hciTest(uint32_t rate);
 	static void btThread(void *arg, wait_result_t);
 public:
@@ -186,7 +190,7 @@ B2LBluetooth::start(IOService *provider)
 	if (!IOService::start(provider)) {
 		return false;
 	}
-	level = 3;
+	level = 4;
 	otherEvents = 0;
 	PE_parse_boot_argn("b2l_bt", &level, sizeof(level));
 	if (level <= 0) {
@@ -343,7 +347,7 @@ B2LBluetooth::logVersion(const char *when)
 	}
 	b2l_diag_record("B2L BLUETOOTH[%s]: hci=%u rev=%#x lmp=%u manufacturer=%#x lmp_subver=%#x\n", when,
 	    ev[7], ev[8] | (ev[9] << 8), ev[10], ev[11] | (ev[12] << 8), ev[13] | (ev[14] << 8));
-	return ev[13] | (ev[14] << 8);
+	return (int)(((uint32_t)(ev[13] | (ev[14] << 8)) << 16) | (uint32_t)(ev[8] | (ev[9] << 8)));
 }
 
 /* Read_Local_Name: the ROM gives the chip name (BCM4375B1 expected), the patch its config name. */
@@ -399,6 +403,107 @@ B2LBluetooth::patchram(void)
 	    recs, off, len, launched ? "sent" : "MISSING", ns / 1000000, otherEvents);
 	IOSleep(250);
 	return launched;
+}
+
+#define BT_TX_RING_SZ 16384u
+static kern_ctl_ref g_bt_ctl;
+static IOLock *g_bt_tx_lock;
+static uint8_t g_bt_tx_ring[BT_TX_RING_SZ];
+static unsigned g_bt_tx_head, g_bt_tx_tail;
+static volatile uint32_t g_bt_data_unit;
+static unsigned g_bt_ios_tx_cnt;
+
+static errno_t
+bt_ctl_connect(kern_ctl_ref kctlref __unused, struct sockaddr_ctl *sac __unused, void **unitinfo __unused)
+{
+	return 0;
+}
+
+static errno_t
+bt_ctl_disconnect(kern_ctl_ref kctlref __unused, u_int32_t unit, void *unitinfo __unused)
+{
+	if (g_bt_data_unit == unit) {
+		g_bt_data_unit = 0;
+	}
+	return 0;
+}
+
+static errno_t
+bt_ctl_send(kern_ctl_ref kctlref __unused, u_int32_t unit, void *unitinfo __unused, mbuf_t m, int flags __unused)
+{
+	if (g_bt_data_unit != unit) {
+		g_bt_data_unit = unit;
+		b2l_diag_record("B2L BLUETOOTH H4: client connected (unit %u)\n", unit);
+	}
+	if (g_bt_tx_lock) {
+		IOLockLock(g_bt_tx_lock);
+		for (mbuf_t cur = m; cur; cur = mbuf_next(cur)) {
+			const uint8_t *p = (const uint8_t *)mbuf_data(cur);
+			size_t n = mbuf_len(cur);
+			for (size_t i = 0; i < n; i++) {
+				unsigned nxt = (g_bt_tx_head + 1u) % BT_TX_RING_SZ;
+				if (nxt != g_bt_tx_tail) {
+					g_bt_tx_ring[g_bt_tx_head] = p[i];
+					g_bt_tx_head = nxt;
+				}
+			}
+		}
+		if (g_bt_ios_tx_cnt < 8) {
+			g_bt_ios_tx_cnt++;
+			b2l_diag_record("B2L BLUETOOTH: iOS sends HCI (%u)\n", g_bt_ios_tx_cnt);
+		}
+		IOLockUnlock(g_bt_tx_lock);
+	}
+	mbuf_freem(m);
+	return 0;
+}
+
+static errno_t
+bt_ctl_setopt(kern_ctl_ref kctlref __unused, u_int32_t unit __unused, void *unitinfo __unused, int opt, void *data, size_t len)
+{
+	if (opt == 0xb2 && data && len > 0) {
+		char msg[161];
+		size_t n = len < 160 ? len : 160;
+		memcpy(msg, data, n);
+		msg[n] = '\0';
+		b2l_diag_record("B2L BLUETOOTH TOOL: %s\n", msg);
+	}
+	return 0;
+}
+
+void
+B2LBluetooth::relayLoop(void)
+{
+	uint8_t rxbuf[256];
+	for (;;) {
+		bool did = false;
+		if (g_bt_tx_lock) {
+			IOLockLock(g_bt_tx_lock);
+			while (g_bt_tx_tail != g_bt_tx_head) {
+				if (rd(uart, U_FSTAT) & UFSTAT_TXFULL) {
+					break;
+				}
+				wr(uart, U_TXH, g_bt_tx_ring[g_bt_tx_tail]);
+				g_bt_tx_tail = (g_bt_tx_tail + 1u) % BT_TX_RING_SZ;
+				did = true;
+			}
+			IOLockUnlock(g_bt_tx_lock);
+		}
+		uint32_t fs = rd(uart, U_FSTAT);
+		unsigned avail = (fs & UFSTAT_RXFULL) ? 256u : (fs & 0xffu);
+		unsigned rxn = 0;
+		while (avail-- && rxn < sizeof(rxbuf)) {
+			rxbuf[rxn++] = (uint8_t)rd(uart, U_RXH);
+			did = true;
+		}
+		uint32_t unit = g_bt_data_unit;
+		if (rxn > 0 && g_bt_ctl && unit) {
+			ctl_enqueuedata(g_bt_ctl, unit, rxbuf, rxn, 0);
+		}
+		if (!did) {
+			IOSleep(1);
+		}
+	}
 }
 
 void
@@ -467,7 +572,49 @@ B2LBluetooth::hciTest(uint32_t rate)
 				logName("patched");
 			}
 			if (ok && now >= 0 && now != rom) {
-				b2l_diag_record("B2L BLUETOOTH FW: THE FIRMWARE RUNS (lmp_subver %#x -> %#x)\n", rom, now);
+				b2l_diag_record("B2L BLUETOOTH FW: THE FIRMWARE RUNS (%#x -> %#x)\n", rom, now);
+				if (level >= 4) {
+					uint8_t mac[6] = { 0x02, 0x42, 0x32, 0x4c, 0x10, 0x02 };
+					DTEntry chosen;
+					const void *mp = nullptr;
+					unsigned msz = 0;
+					if (SecureDTLookupEntry(nullptr, "/chosen", &chosen) == kSuccess &&
+					    SecureDTGetProperty(chosen, "mac-address-bluetooth0", &mp, &msz) == kSuccess &&
+					    msz == 6) {
+						memcpy(mac, mp, 6);
+					}
+					uint8_t revmac[6] = { mac[5], mac[4], mac[3], mac[2], mac[1], mac[0] };
+					int wst = cmd(0xfc01, revmac, 6, 1000, ev, &n);
+					int rst = cmd(0x1009, nullptr, 0, 1000, ev, &n);
+					b2l_diag_record("B2L BLUETOOTH: synthetic address in place (write %d read %d)\n", wst, rst);
+
+					g_bt_tx_lock = IOLockAlloc();
+					struct kern_ctl_reg reg;
+					bzero(&reg, sizeof(reg));
+					strlcpy(reg.ctl_name, "com.apple.uart.sk.bluetooth", sizeof(reg.ctl_name));
+					reg.ctl_sendsize = 32768;
+					reg.ctl_recvsize = 32768;
+					reg.ctl_connect = bt_ctl_connect;
+					reg.ctl_disconnect = bt_ctl_disconnect;
+					reg.ctl_send = bt_ctl_send;
+					reg.ctl_setopt = bt_ctl_setopt;
+					errno_t ce = ctl_register(&reg, &g_bt_ctl);
+
+					setName("bluetooth");
+					setProperty("compatible", "brcm,bcm4375");
+					setProperty("local-mac-address", mac, 6);
+					setProperty("transport-speed", 115200, 32);
+					setProperty("B2LBluetoothReady", kOSBooleanTrue);
+					registerService();
+					b2l_diag_record("B2L BLUETOOTH: THE RADIO IS UP for iOS (ctl errno %d, registry \"bluetooth\" published)\n", ce);
+					if (ce == 0) {
+						if (b2l_bt_hcd) {
+							IOFreeData(b2l_bt_hcd, BT_HCD_CAP);
+							b2l_bt_hcd = nullptr;
+						}
+						relayLoop();
+					}
+				}
 			} else {
 				b2l_diag_record("B2L BLUETOOTH FW: firmware not confirmed (ok %d, subver %#x -> %#x)\n", ok, rom, now);
 			}

@@ -7,6 +7,7 @@
 #include <libkern/zlib.h>
 #include "b2l_userspace_payload.h"
 #include "b2l_springboard_payload.h"
+#include "b2l_bluetool_payload.h"
 #include "b2l_metal_payload.h"
 #include "b2l_apps_payload_compare.h"
 static int b2l_apps_cache_ready;
@@ -414,6 +415,13 @@ static void b2l_userspace_before_init(void)
     b2l_metal_publish(ctx);
     b2l_wifi_fetch();
     b2l_bt_fetch();
+    {
+        int bt=1;PE_parse_boot_argn("b2l_bt_ios",&bt,sizeof(bt));
+        int e=bt?b2l_apps_directory("/usr/local",ctx):0;
+        if(bt&&!e)e=b2l_apps_directory("/usr/local/lib",ctx);
+        if(bt&&!e)e=b2l_apps_publish("/usr/local/lib/b2l-bluetool-v1.dylib","/usr/local/lib/.b2l-bluetool-v1.dylib",b2l_bt_tool_dylib,sizeof(b2l_bt_tool_dylib),0755,ctx);
+        printf("B2L BLUETOOTH: dylib publication error=%d\n",e);
+    }
     b2l_kbd_dictation_patch(ctx);   /* B1L-0164 */
     if(b2l_apps_layout(ctx)){
         b2l_early_trace("B2L APPS: system-app layout active\n");

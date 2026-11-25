@@ -435,14 +435,153 @@ static int b2l_system_hfs_ok;
 /* B1L-0031 (GPU G6): stream a regular, uncompressed file of the SYSTEM volume (path relative to its root,
  * e.g. "b2l-gl-v1/libOSMesa.8.dylib") to sink(ctx, offset, bytes, n). Read only; called before launchd,
  * single-threaded (b2l_hfs_find uses the volume's node buffer). Returns 0 and the size, or an error. */
+#define B2L_FW_MAGIC   "B2LFW001"
+#define B2L_FW_MAX_ENT 16U
+struct b2l_fw_entry {
+ char name[16];
+ uint32_t offset;
+ uint32_t size;
+ uint32_t crc32;
+ uint32_t reserved;
+};
+struct b2l_fw_header {
+ char magic[8];
+ uint32_t version;
+ uint32_t count;
+ uint64_t total_bytes;
+ uint8_t reserved[40];
+ struct b2l_fw_entry entries[B2L_FW_MAX_ENT];
+};
+static int b2l_boot_fw_state;
+static uint64_t b2l_boot_part_base, b2l_boot_part_size, b2l_boot_fw_off;
+static struct b2l_fw_header b2l_boot_fw_hdr;
+
+static int
+b2l_boot_fw_probe(void)
+{
+ if (b2l_boot_fw_state > 0) return 0;
+ if (b2l_boot_fw_state < 0) return ENXIO;
+ const struct b2l_gpt_partition *bootp = NULL;
+ for (unsigned i = 0; i < b2l_partitions.partition_count; i++) {
+  if (b2l_gpt_label_equal(b2l_partitions.partitions[i].name, "boot")) {
+   bootp = &b2l_partitions.partitions[i];
+   break;
+  }
+ }
+ if (!bootp) { b2l_boot_fw_state = -1; return ENXIO; }
+ uint64_t base = bootp->first_lba * b2l_reader.block_size;
+ uint64_t size = bootp->block_count * b2l_reader.block_size;
+ uint8_t *sec = kalloc_data(4096, Z_WAITOK | Z_ZERO);
+ if (!sec) return ENOMEM;
+ size_t done = 0;
+ lck_mtx_lock(&b2l_ufs_disk_lock);
+ int err = b2l_ufs_read_view(&b2l_reader, base, size, 0, 4096, 0, sec, &done);
+ lck_mtx_unlock(&b2l_ufs_disk_lock);
+ if (err || done != 4096 || memcmp(sec, "ANDROID!", 8) != 0) {
+  kfree_data(sec, 4096);
+  b2l_boot_fw_state = -1;
+  return ENOENT;
+ }
+ uint32_t ksize = 0, psize = 0;
+ memcpy(&ksize, sec + 8, 4);
+ memcpy(&psize, sec + 36, 4);
+ if (psize != 2048 || ksize > size) {
+  kfree_data(sec, 4096);
+  b2l_boot_fw_state = -1;
+  return EINVAL;
+ }
+ uint64_t xnu_trailer = 2048ULL + (((uint64_t)ksize + 2047ULL) & ~2047ULL);
+ if (xnu_trailer + 512 > size) {
+  kfree_data(sec, 4096);
+  b2l_boot_fw_state = -1;
+  return ENOENT;
+ }
+ done = 0;
+ lck_mtx_lock(&b2l_ufs_disk_lock);
+ err = b2l_ufs_read_view(&b2l_reader, base, size, xnu_trailer, 512, 0, sec, &done);
+ lck_mtx_unlock(&b2l_ufs_disk_lock);
+ if (err || done != 512 || memcmp(sec, "B2LXNU02", 8) != 0) {
+  kfree_data(sec, 4096);
+  b2l_boot_fw_state = -1;
+  return ENOENT;
+ }
+ uint64_t xnu_size = 0, xnu_off = 0;
+ memcpy(&xnu_size, sec + 16, 8);
+ memcpy(&xnu_off, sec + 24, 8);
+ uint64_t fw_off = (xnu_trailer + xnu_off + xnu_size + 4095ULL) & ~4095ULL;
+ if (fw_off + sizeof(b2l_boot_fw_hdr) > size) {
+  kfree_data(sec, 4096);
+  b2l_boot_fw_state = -1;
+  return ENOENT;
+ }
+ done = 0;
+ lck_mtx_lock(&b2l_ufs_disk_lock);
+ err = b2l_ufs_read_view(&b2l_reader, base, size, fw_off, 4096, 0, sec, &done);
+ lck_mtx_unlock(&b2l_ufs_disk_lock);
+ if (err || done != 4096 || memcmp(sec, B2L_FW_MAGIC, 8) != 0) {
+  kfree_data(sec, 4096);
+  b2l_boot_fw_state = -1;
+  return ENOENT;
+ }
+ memcpy(&b2l_boot_fw_hdr, sec, sizeof(b2l_boot_fw_hdr));
+ kfree_data(sec, 4096);
+ if (b2l_boot_fw_hdr.version != 1 || b2l_boot_fw_hdr.count > B2L_FW_MAX_ENT ||
+     b2l_boot_fw_hdr.total_bytes > size - fw_off) {
+  b2l_boot_fw_state = -1;
+  return EINVAL;
+ }
+ b2l_boot_part_base = base;
+ b2l_boot_part_size = size;
+ b2l_boot_fw_off = fw_off;
+ b2l_boot_fw_state = 1;
+ printf("B2L FW: found B2LFW001 trailer at boot+%llu (%u entries)\n",
+     (unsigned long long)fw_off, b2l_boot_fw_hdr.count);
+ return 0;
+}
+
+static int
+b2l_boot_fw_copy(const char *path, int (*sink)(void *, uint64_t, const void *, size_t), void *ctx, uint64_t *size)
+{
+ int err = b2l_boot_fw_probe();
+ if (err) return err;
+ const char *name = path;
+ if (!strncmp(name, "b2l-wifi/", 9)) name += 9;
+ const struct b2l_fw_entry *ent = NULL;
+ for (uint32_t i = 0; i < b2l_boot_fw_hdr.count; i++) {
+  if (!strncmp(b2l_boot_fw_hdr.entries[i].name, name, sizeof(b2l_boot_fw_hdr.entries[i].name))) {
+   ent = &b2l_boot_fw_hdr.entries[i];
+   break;
+  }
+ }
+ if (!ent || !ent->size || (uint64_t)ent->offset + ent->size > b2l_boot_fw_hdr.total_bytes)
+  return ENOENT;
+ uint8_t *chunk = kalloc_data(65536, Z_WAITOK);
+ if (!chunk) return ENOMEM;
+ for (uint64_t off = 0; off < ent->size;) {
+  size_t n = (size_t)MIN((uint64_t)65536, (uint64_t)ent->size - off);
+  size_t done = 0;
+  lck_mtx_lock(&b2l_ufs_disk_lock);
+  err = b2l_ufs_read_view(&b2l_reader, b2l_boot_part_base, b2l_boot_part_size,
+      b2l_boot_fw_off + ent->offset + off, n, 0, chunk, &done);
+  lck_mtx_unlock(&b2l_ufs_disk_lock);
+  if (err || done != n) { kfree_data(chunk, 65536); return err ? err : EIO; }
+  err = sink(ctx, off, chunk, n);
+  if (err) { kfree_data(chunk, 65536); return err; }
+  off += n;
+ }
+ kfree_data(chunk, 65536);
+ if (size) *size = ent->size;
+ return 0;
+}
+
 int b2l_system_file_copy(const char *path, int (*sink)(void *, uint64_t, const void *, size_t), void *ctx, uint64_t *size);
 int
 b2l_system_file_copy(const char *path, int (*sink)(void *, uint64_t, const void *, size_t), void *ctx, uint64_t *size)
 {
  static uint8_t chunk[65536];
  struct b2l_hfs_file f;
- if(!b2l_system_hfs_ok)return ENXIO;
- if(b2l_hfs_find(&b2l_cache_hfs,path,&f))return ENOENT;
+ if(!b2l_system_hfs_ok)return b2l_boot_fw_copy(path,sink,ctx,size);
+ if(b2l_hfs_find(&b2l_cache_hfs,path,&f))return b2l_boot_fw_copy(path,sink,ctx,size);
  if(f.data.size==0||f.data.size>(64ull<<20))return EFBIG;
  for(uint64_t off=0;off<f.data.size;){
   size_t n=(size_t)MIN((uint64_t)sizeof(chunk),f.data.size-off);
