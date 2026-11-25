@@ -588,11 +588,10 @@ b2l_zc_show(uint64_t phys, uint32_t bytesPerRow)
 	}
 	uint64_t t0 = mach_absolute_time();
 	uint32_t req;
-	/* B1L-0110: ONE FRAME AHEAD, as Android's and Metal's swap chains are. A flip no longer waits for the panel to
-	 * take it: the address is written, the update asked for, and the caller goes on drawing the next frame. What is
-	 * waited for is the PREVIOUS flip, if the panel has not taken it yet, before writing over its registers -- so at
-	 * most one flip is in flight. The first eight are still waited for and checked (the B1L-0096 safety). */
-	for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 50; i++) {
+	/* Wait for any pending DECON shadow update before programming the next scanout address, then wait
+	 * until DECON latches `phys` on TE. backboardd's zero-copy swapchain only has 2 buffers (surface 2 & 3),
+	 * so returning before DECON switches away from the previous buffer lets Mali overwrite it mid-scanout. */
+	for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 100; i++) {
 		IOSleep(1);
 	}
 	if ((req & B2L_DECON_UPDATE_BITS) == 0) {
@@ -603,12 +602,8 @@ b2l_zc_show(uint64_t phys, uint32_t bytesPerRow)
 		__asm__ volatile("dsb sy" ::: "memory");
 		b2l_zc_decon[B2L_DECON_UPDATE_REQ] = b2l_zc_decon[B2L_DECON_UPDATE_REQ] | B2L_DECON_UPDATE_BITS;
 		__asm__ volatile("dsb sy" ::: "memory");
-		if (b2l_zc_flips < 8) {
-			for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 50; i++) {
-				IOSleep(1);
-			}
-		} else {
-			req = 0;   /* taken or not, it is the next flip that will wait for it */
+		for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 100; i++) {
+			IOSleep(1);
 		}
 	}
 	if (b2l_zc_flips < 8 || (req & B2L_DECON_UPDATE_BITS) != 0) {
