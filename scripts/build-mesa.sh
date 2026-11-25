@@ -89,12 +89,12 @@ fi
 	-Dosmesa=true -Dllvm=disabled -Dshared-glapi=enabled -Dgles1=disabled -Dgles2=enabled -Dopengl=true \
 	-Dzstd=disabled -Dxmlconfig=disabled -Dexpat=disabled -Dshader-cache=enabled -Dvalgrind=disabled \
 	-Dlibunwind=disabled -Dglvnd=disabled -Dvideo-codecs= -Dtools= -Dgallium-vdpau=disabled -Dgallium-va=disabled \
-	-Dgallium-xa=disabled -Dlmsensors=disabled -Dbuild-tests=false > meson-setup.log
+	-Dgallium-xa=disabled -Dlmsensors=disabled -Dbuild-tests=false > meson-setup.log 2>&1 || { cat meson-setup.log >&2; exit 1; }
 echo "b_ndebug=$NDEBUG" > $BUILD/.b2l-ndebug
 echo "shader-cache=enabled" > $BUILD/.b2l-shader-cache
-ninja -C $BUILD > ninja.log
+ninja -C $BUILD > ninja.log 2>&1 || { tail -n 100 ninja.log >&2; exit 1; }
 # B1L-0070: libhakiosair (the Metal driver's compiler library) is not a default target: built by name
-ninja -C $BUILD src/gallium/targets/hakiosair/libhakiosair.dylib >> ninja.log
+ninja -C $BUILD src/gallium/targets/hakiosair/libhakiosair.dylib >> ninja.log 2>&1 || { tail -n 100 ninja.log >&2; exit 1; }
 "$(xcrun -f strip)" -x -o out/libOSMesa.8.dylib $BUILD/src/gallium/targets/osmesa/libOSMesa.8.dylib
 install_name_tool -id /usr/local/lib/b2l-gl/libOSMesa.8.dylib out/libOSMesa.8.dylib
 /usr/bin/codesign --force --sign - out/libOSMesa.8.dylib
