@@ -191,8 +191,11 @@ AppleCLCD::start(IOService *provider)
 		b2l_surface_set_scanout_shape(fWidth, fHeight, fRowBytes, b2l_zc_active());
 	}
 	/* B1L-0097: backboardd drew into the panel memory itself when given it as the default surface -- every element seen
-	 * appearing one after the other. It gets ordinary memory of the same shape, shown like any other surface. */
-	fClientSurface = fSurface != NULL ? b2l_surface_create_memory(fLogicalW, fLogicalH, fRowBytes, B2L_FB_FORMAT_BGRA,
+	 * appearing one after the other. It gets ordinary memory of the same shape, shown like any other surface.
+	 * Mali/Panfrost requires 64-byte row alignment to import an IOSurface directly as a render target; on 1080px-wide
+	 * panels (4320 bytes/row), unaligned rows fall back to a read-only live copy so the scanout surface stays black. */
+	uint32_t clientRowBytes = !fScaled ? ((fRowBytes + 63u) & ~63u) : fRowBytes;
+	fClientSurface = fSurface != NULL ? b2l_surface_create_memory(fLogicalW, fLogicalH, clientRowBytes, B2L_FB_FORMAT_BGRA,
 	    b2l_zc_active()) : NULL;
 	IOLog("B2L FB: default surface for clients: %s (id %u, scan-out %#llx)\n",
 	    fClientSurface != NULL ? "its own memory" : "the panel memory",
