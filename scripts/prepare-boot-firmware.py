@@ -136,6 +136,26 @@ def main():
             soc_text = soc_text.replace(disabled, binding)
         if soc_text.splitlines().count(binding) != 1:
             p.error("expected exactly one enabled S5E9820 HsI2cLib binding")
+        # beyond2lte-uefi overlays an older S5E9820Pkg.dsc.inc that omits
+        # upstream GpioDxe/SpeedyDxe PCDs and GpioBankLib, causing both drivers
+        # to return EFI_UNSUPPORTED and blocking HsI2cDxe/PmicDxe/B2LTouchDxe.
+        if (root / "Silicon/Samsung/S5E9820Pkg/Library/GpioBankLib/GpioBankLib.inf").is_file():
+            gpio_bank = "  GpioBankLib|S5E9820Pkg/Library/GpioBankLib/GpioBankLib.inf"
+            if gpio_bank not in soc_text:
+                if "[LibraryClasses]" not in soc_text:
+                    p.error("S5E9820Pkg.dsc.inc has no [LibraryClasses] section")
+                soc_text = soc_text.replace("[LibraryClasses]", f"[LibraryClasses]\n{gpio_bank}", 1)
+            required_pcds = (
+                ("gSamsungPkgTokenSpaceGuid.PcdGpioCtrlAddr",
+                 "  gSamsungPkgTokenSpaceGuid.PcdGpioCtrlAddr|{ 0x00, 0x00, 0x43, 0x10, 0x00, 0x00, 0x83, 0x10, 0x00, 0x00, 0x03, 0x13, 0x00, 0x00, 0xC4, 0x13, 0x00, 0x00, 0x58, 0x15, 0x00, 0x00, 0x85, 0x15, 0x00, 0x00, 0xC3, 0x15, 0x00, 0x00, 0xC6, 0x18 }"),
+                ("gSamsungPkgTokenSpaceGuid.PcdSpeedyBusAddr",
+                 "  gSamsungPkgTokenSpaceGuid.PcdSpeedyBusAddr|{ 0x00, 0x00, 0x97, 0x15, 0x00, 0x00, 0x98, 0x15 }"),
+            )
+            missing_pcds = [line for key, line in required_pcds if key not in soc_text]
+            if missing_pcds:
+                if "[PcdsFixedAtBuild]" not in soc_text:
+                    p.error("S5E9820Pkg.dsc.inc has no [PcdsFixedAtBuild] section")
+                soc_text = soc_text.replace("[PcdsFixedAtBuild]", "[PcdsFixedAtBuild]\n" + "\n".join(missing_pcds), 1)
         soc.write_text(soc_text)
 
 

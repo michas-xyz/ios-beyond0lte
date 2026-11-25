@@ -67,6 +67,30 @@ VOID PlatformBootManagerAfterConsole () {
                 self.assertEqual(dxe.read_text().splitlines(),
                     ["  INF beyond2ltePkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf"])
 
+    def test_touch_restores_upstream_gpio_and_speedy_bindings(self):
+        with tempfile.TemporaryDirectory(prefix="b2l-touch-soc-test-") as directory:
+            root = Path(directory)
+            self.fixture(root)
+            dxe = root / "Platforms/Samsung/beyond2ltePkg/Include/DXE.inc"
+            dxe.parent.mkdir(parents=True, exist_ok=True)
+            dxe.write_text("  # INF beyond2ltePkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf\n")
+            gbank = root / "Silicon/Samsung/S5E9820Pkg/Library/GpioBankLib/GpioBankLib.inf"
+            gbank.parent.mkdir(parents=True, exist_ok=True)
+            gbank.write_text("[Defines]\n")
+            soc = root / "Silicon/Samsung/S5E9820Pkg/S5E9820Pkg.dsc.inc"
+            soc.write_text("[PcdsFixedAtBuild]\n[LibraryClasses]\n  # HsI2cLib|S5E9820Pkg/Library/HsI2cLib/HsI2cLib.inf\n")
+            command = [sys.executable, str(PREPARE), "--mu", str(root),
+                       "--loader", str(root / "Loader.efi"), "--loader-guid", GUID,
+                       "--enable-touch"]
+            for unused in range(2):
+                result = subprocess.run(command, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            text = soc.read_text()
+            self.assertEqual(text.count("gSamsungPkgTokenSpaceGuid.PcdGpioCtrlAddr|"), 1)
+            self.assertEqual(text.count("gSamsungPkgTokenSpaceGuid.PcdSpeedyBusAddr|"), 1)
+            self.assertEqual(text.count("GpioBankLib|S5E9820Pkg/Library/GpioBankLib/GpioBankLib.inf"), 1)
+            self.assertEqual(text.count("HsI2cLib|S5E9820Pkg/Library/HsI2cLib/HsI2cLib.inf"), 1)
+
     def test_deterministic_launch_and_idempotence(self):
         with tempfile.TemporaryDirectory(prefix="b2l-firmware-test-") as directory:
             root = Path(directory)
