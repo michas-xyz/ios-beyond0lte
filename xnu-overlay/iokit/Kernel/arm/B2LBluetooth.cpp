@@ -459,6 +459,17 @@ bt_ctl_send(kern_ctl_ref kctlref __unused, u_int32_t unit, void *unitinfo __unus
 }
 
 static errno_t
+bt_ctl_getopt(kern_ctl_ref kctlref __unused, u_int32_t unit __unused, void *unitinfo __unused, int opt, void *data, size_t *len)
+{
+	if (opt == (int)0x40487413u /* TIOCGETA */ && data != NULL && len != NULL && *len >= 0x48) {
+		bzero(data, 0x48);
+		*len = 0x48;
+		return 0;
+	}
+	return 0;
+}
+
+static errno_t
 bt_ctl_setopt(kern_ctl_ref kctlref __unused, u_int32_t unit __unused, void *unitinfo __unused, int opt, void *data, size_t len)
 {
 	if (opt == 0xb2 && data && len > 0) {
@@ -595,12 +606,13 @@ B2LBluetooth::hciTest(uint32_t rate)
 					g_bt_tx_lock = IOLockAlloc();
 					struct kern_ctl_reg reg;
 					bzero(&reg, sizeof(reg));
-					strlcpy(reg.ctl_name, "com.apple.uart.sk.bluetooth", sizeof(reg.ctl_name));
+					strlcpy(reg.ctl_name, "com.apple.uart.bluetooth", sizeof(reg.ctl_name));
 					reg.ctl_sendsize = 32768;
 					reg.ctl_recvsize = 32768;
 					reg.ctl_connect = bt_ctl_connect;
 					reg.ctl_disconnect = bt_ctl_disconnect;
 					reg.ctl_send = bt_ctl_send;
+					reg.ctl_getopt = bt_ctl_getopt;
 					reg.ctl_setopt = bt_ctl_setopt;
 					errno_t ce = ctl_register(&reg, &g_bt_ctl);
 

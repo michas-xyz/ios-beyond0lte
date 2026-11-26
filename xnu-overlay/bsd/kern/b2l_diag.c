@@ -26,9 +26,15 @@ void b2l_diag_record(const char *fmt,...)
     size_t used=(size_t)n<sizeof(text)?(size_t)n:sizeof(text)-1;
     if((size_t)n>=sizeof(text))text[used-1]='\n';
     b2l_log_append_bytes(text,used);
-    if((!strncmp(text,"B2L WIFI",8)&&strncmp(text,"B2L WIFI T+",11))||!strncmp(text,"B2L BLUETOOTH",13)||!strncmp(text,"B2L ZC",6)){
-        static unsigned diag_print_count;
-        if(__atomic_fetch_add(&diag_print_count,1,__ATOMIC_RELAXED)<250)printf("%s",text);
+    if(!strncmp(text,"B2L WIFI",8)&&strncmp(text,"B2L WIFI T+",11)){
+        static unsigned wifi_print_count;
+        if(__atomic_fetch_add(&wifi_print_count,1,__ATOMIC_RELAXED)<250)printf("%s",text);
+    }else if(!strncmp(text,"B2L BLUETOOTH",13)){
+        static unsigned bt_print_count;
+        if(__atomic_fetch_add(&bt_print_count,1,__ATOMIC_RELAXED)<64)printf("%s",text);
+    }else if(!strncmp(text,"B2L ZC",6)){
+        static unsigned zc_print_count;
+        if(__atomic_fetch_add(&zc_print_count,1,__ATOMIC_RELAXED)<32)printf("%s",text);
     }
 }
 /* B1L-0117: the boot-arg read once. progress_role() runs on every system call of SpringBoard and backboardd (twice

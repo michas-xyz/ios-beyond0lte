@@ -596,17 +596,31 @@ b2l_zc_show(uint64_t phys, uint32_t bytesPerRow)
 	for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 150; i++) {
 		IOSleep(1);
 	}
-	if ((req & B2L_DECON_UPDATE_BITS) == 0) {
-		/* B1L-0098: the row length, in pixels, is the source width of IDMA_SRC_SIZE (backboardd's rows are 5888
-		 * bytes where the panel's are 5760); the image (IDMA_IMG_SIZE) stays the panel's */
-		b2l_zc_base[(0x10 - 0x40) / 4] = (b2l_zc_src_size & 0xffff0000u) | (bytesPerRow / 4);
-		*b2l_zc_base = (uint32_t)phys;
-		__asm__ volatile("dsb sy" ::: "memory");
-		b2l_zc_decon[B2L_DECON_UPDATE_REQ] = b2l_zc_decon[B2L_DECON_UPDATE_REQ] | B2L_DECON_UPDATE_BITS;
-		__asm__ volatile("dsb sy" ::: "memory");
-		for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 150; i++) {
-			IOSleep(1);
+	if ((req & B2L_DECON_UPDATE_BITS) != 0) {
+		static unsigned zc_pre_timeouts;
+		if (zc_pre_timeouts < 8) {
+			zc_pre_timeouts++;
+			b2l_diag_record("B2L ZC: pre-flip timeout flip=%u req=%08x\n", b2l_zc_flips, req);
 		}
+		if (b2l_zc_flips == 0) {
+			*b2l_zc_base = (uint32_t)b2l_zc_panel;
+			b2l_zc_base[(0x10 - 0x40) / 4] = b2l_zc_src_size;
+			b2l_zc_decon[B2L_DECON_UPDATE_REQ] = b2l_zc_decon[B2L_DECON_UPDATE_REQ] | B2L_DECON_UPDATE_BITS;
+			b2l_zc_on = false;
+			b2l_zc_shown = b2l_zc_panel;
+			b2l_diag_record("B2L ZC: DECON initial flip timeout (req=%08x): OFF\n", req);
+		}
+		return false;
+	}
+	/* B1L-0098: the row length, in pixels, is the source width of IDMA_SRC_SIZE (backboardd's rows are 5888
+	 * bytes where the panel's are 5760); the image (IDMA_IMG_SIZE) stays the panel's */
+	b2l_zc_base[(0x10 - 0x40) / 4] = (b2l_zc_src_size & 0xffff0000u) | (bytesPerRow / 4);
+	*b2l_zc_base = (uint32_t)phys;
+	__asm__ volatile("dsb sy" ::: "memory");
+	b2l_zc_decon[B2L_DECON_UPDATE_REQ] = b2l_zc_decon[B2L_DECON_UPDATE_REQ] | B2L_DECON_UPDATE_BITS;
+	__asm__ volatile("dsb sy" ::: "memory");
+	for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 150; i++) {
+		IOSleep(1);
 	}
 	if (b2l_zc_flips < 8 || (req & B2L_DECON_UPDATE_BITS) != 0) {
 		IOLog("B2L ZC: flip %u to %#llx (%u bytes a row): update request now %08x, base %08x, shadow base %08x, "

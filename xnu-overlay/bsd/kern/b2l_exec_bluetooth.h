@@ -37,7 +37,7 @@ b2l_exec_bluetooth(struct image_params *imgp, int pointer_size)
 	if (is_daemon) {
 		int err = b2l_exec_add_env(imgp, pointer_size, "BT_HCI_TRANSPORT=",
 		    sizeof("BT_HCI_TRANSPORT=") - 1,
-		    "BT_HCI_TRANSPORT=H4:POSIX:com.apple.uart.sk.bluetooth,115200");
+		    "BT_HCI_TRANSPORT=H4:POSIX:com.apple.uart.bluetooth,115200");
 		if (err) return err;
 		err = b2l_exec_add_env(imgp, pointer_size, "BT_BAUDRATE=",
 		    sizeof("BT_BAUDRATE=") - 1,
