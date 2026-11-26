@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-2-Clause
-"""Build b2l-springboard-v7.dylib (arm64e) and its kernel seed header."""
+"""Build b2l-springboard-v8.dylib (arm64e) and its kernel seed header."""
 from pathlib import Path
 import argparse,hashlib,subprocess,tempfile,struct
 r=Path(__file__).resolve().parents[1]
@@ -18,14 +18,14 @@ with tempfile.TemporaryDirectory(prefix='b2l-sb-') as td:
   print('wallpaper:',out.stat().st_size,'bytes')
  else:
   print('wallpaper: none (the generated picture stays)')
- lib=Path(td)/'b2l-springboard-v7.dylib'
+ lib=Path(td)/'b2l-springboard-v8.dylib'
  subprocess.run(['xcrun','--sdk','iphoneos','clang','-target',f'arm64e-apple-ios{sdk_ver}','-isysroot',sdk,'-Os','-fobjc-arc','-Wall','-Wextra','-Werror','-Wno-deprecated-declarations',
-  '-dynamiclib','-install_name','/usr/local/lib/b2l-springboard-v7.dylib','-framework','Foundation','-framework','UIKit','-framework','CoreGraphics',str(r/'userspace/b2l-springboard.m'),'-o',str(lib)]+wallargs,check=True)
+  '-dynamiclib','-install_name','/usr/local/lib/b2l-springboard-v8.dylib','-framework','Foundation','-framework','UIKit','-framework','CoreGraphics',str(r/'userspace/b2l-springboard.m'),'-o',str(lib)]+wallargs,check=True)
  subprocess.run(['/usr/bin/codesign','--force','--sign','-','--identifier','dev.b2l.springboard',str(lib)],check=True)
  subprocess.run(['/usr/bin/codesign','--verify',str(lib)],check=True)
  data=lib.read_bytes()
 cputype,subtype,ftype=struct.unpack_from('<III',data,4)
 if cputype!=0x100000c or subtype&0xffffff!=2 or ftype!=6:raise SystemExit('not an arm64e dylib')
 if len(data)>2*1024*1024:raise SystemExit('dylib too large')   # B1L-0125: with the photo
-a.output.write_text('/* Generated: b2l-springboard-v7.dylib (userspace/b2l-springboard.m). */\nstatic const unsigned char b2l_sb_dylib[] = {\n'+''.join(' '+','.join('0x%02x'%x for x in data[i:i+20])+',\n' for i in range(0,len(data),20))+'};\n')
-print('Built b2l-springboard-v7.dylib:',len(data),'bytes; sha256',hashlib.sha256(data).hexdigest())
+a.output.write_text('/* Generated: b2l-springboard-v8.dylib (userspace/b2l-springboard.m). */\nstatic const unsigned char b2l_sb_dylib[] = {\n'+''.join(' '+','.join('0x%02x'%x for x in data[i:i+20])+',\n' for i in range(0,len(data),20))+'};\n')
+print('Built b2l-springboard-v8.dylib:',len(data),'bytes; sha256',hashlib.sha256(data).hexdigest())

@@ -203,25 +203,42 @@ static void hook_module_caps(void)
     done = YES;
     b2l_log(@"CCSModuleMetadata requiredDeviceCapabilities: arm64e dropped");
 }
-static UIEdgeInsets (*sb_edge_insets_was)(id, SEL);
-static UIEdgeInsets sb_edge_insets(id self, SEL cmd)
+static void (*sb_layout_was)(id, SEL);
+static BOOL sb_shift_trailing(UIView *v, UIView *root, NSMutableString *dump, int depth)
 {
-    UIEdgeInsets r = sb_edge_insets_was ? sb_edge_insets_was(self, cmd) : UIEdgeInsetsZero;
-    static BOOL logged;
-    if (!logged) {
-        logged = YES;
-        b2l_log([NSString stringWithFormat:@"statusBar edgeInsets: {%.1f, %.1f, %.1f, %.1f} -> right +46",
-            (double)r.top, (double)r.left, (double)r.bottom, (double)r.right]);
+    BOOL shifted = NO;
+    CGRect f = [v convertRect:v.bounds toView:root];
+    if (dump && depth <= 4) {
+        [dump appendFormat:@" [%d:%@(%.0f,%.0f %.0fx%.0f)]", depth, NSStringFromClass([v class]),
+            f.origin.x, f.origin.y, f.size.width, f.size.height];
     }
-    r.right += 46.0;
-    return r;
+    if (v != root && f.origin.x >= 180.0 && CGRectGetMaxX(f) >= 310.0 && f.size.width > 0.0 && f.size.width <= 170.0) {
+        CGRect inWin = v.window ? [v convertRect:v.bounds toView:v.window] : f;
+        if (inWin.origin.y < 55.0) {
+            v.transform = CGAffineTransformMakeTranslation(-46.0, 0.0);
+            return YES;
+        }
+    }
+    for (UIView *sub in v.subviews) {
+        if (sb_shift_trailing(sub, root, dump, depth + 1)) shifted = YES;
+    }
+    if (v != root && !shifted && !CGAffineTransformIsIdentity(v.transform) && fabs(v.transform.tx + 46.0) < 0.5) {
+        v.transform = CGAffineTransformIdentity;
+    }
+    return shifted;
 }
-static UIEdgeInsets (*sb_exp_insets_was)(id, SEL);
-static UIEdgeInsets sb_exp_insets(id self, SEL cmd)
+static void sb_layout_subviews(UIView *self, SEL cmd)
 {
-    UIEdgeInsets r = sb_exp_insets_was ? sb_exp_insets_was(self, cmd) : UIEdgeInsetsZero;
-    r.right += 46.0;
-    return r;
+    if (sb_layout_was) sb_layout_was(self, cmd);
+    static int dumps;
+    NSMutableString *dump = (dumps < 3 && self.bounds.size.width > 200.0 && self.subviews.count > 0)
+        ? [NSMutableString stringWithFormat:@"statusBar layout %.0fx%.0f:", self.bounds.size.width, self.bounds.size.height]
+        : nil;
+    BOOL moved = sb_shift_trailing(self, self, dump, 0);
+    if (dump) {
+        dumps++;
+        b2l_log([NSString stringWithFormat:@"%@ moved=%d", dump, moved]);
+    }
 }
 static Class (*vp_was)(id, SEL, id, id);
 static Class vp_override(id self, SEL cmd, id screen, id info)
@@ -268,15 +285,36 @@ static void hook_status_bar(void)
     vp_was = (Class (*)(id, SEL, id, id))method_setImplementation(meth, (IMP)vp_override);
     done = YES;
     b2l_log([NSString stringWithFormat:@"%@ visualProviderSubclassForScreen: hooked", NSStringFromClass(c)]);
+    Class sbCls = objc_getClass("STUIStatusBar");
+    if (!sbCls) sbCls = objc_getClass("_UIStatusBar");
+    if (sbCls) {
+        Method lm = class_getInstanceMethod(sbCls, @selector(layoutSubviews));
+        if (lm) {
+            sb_layout_was = (void (*)(id, SEL))method_setImplementation(lm, (IMP)sb_layout_subviews);
+            b2l_log([NSString stringWithFormat:@"%@ layoutSubviews: hooked", NSStringFromClass(sbCls)]);
+        }
+    }
     Class split = objc_getClass("STUIStatusBarVisualProvider_Split1080");
     if (!split) split = objc_getClass("_UIStatusBarVisualProvider_Split1080");
     if (split) {
-        Method em = class_getInstanceMethod(split, NSSelectorFromString(@"edgeInsets"));
-        Method xm = class_getInstanceMethod(split, NSSelectorFromString(@"expandedEdgeInsets"));
-        if (em) sb_edge_insets_was = (UIEdgeInsets (*)(id, SEL))method_setImplementation(em, (IMP)sb_edge_insets);
-        if (xm) sb_exp_insets_was = (UIEdgeInsets (*)(id, SEL))method_setImplementation(xm, (IMP)sb_exp_insets);
-        b2l_log([NSString stringWithFormat:@"%@ edgeInsets=%d expandedEdgeInsets=%d",
-            NSStringFromClass(split), em != NULL, xm != NULL]);
+        NSMutableString *ms = [NSMutableString stringWithFormat:@"%@ methods:", NSStringFromClass(split)];
+        unsigned mlogged = 0;
+        for (Class k = split; k && mlogged < 35; k = class_getSuperclass(k)) {
+            const char *kn = class_getName(k);
+            if (!strstr(kn, "StatusBarVisualProvider")) break;
+            unsigned int mc = 0;
+            Method *ml = class_copyMethodList(k, &mc);
+            for (unsigned int i = 0; i < mc && mlogged < 35; i++) {
+                const char *sn = sel_getName(method_getName(ml[i]));
+                if (strstr(sn, "Edge") || strstr(sn, "Inset") || strstr(sn, "Corner") ||
+                    strstr(sn, "Margin") || strstr(sn, "Offset") || strstr(sn, "Width") || strstr(sn, "Padding")) {
+                    [ms appendFormat:@" %s", sn];
+                    mlogged++;
+                }
+            }
+            if (ml) free(ml);
+        }
+        b2l_log(ms);
     }
     unsigned int cnt = 0;
     Class *list = objc_copyClassList(&cnt);
@@ -303,7 +341,7 @@ static void image_added(const struct mach_header *mh, intptr_t slide)
 
 __attribute__((constructor)) static void b2l_springboard_init(void)
 {
-    b2l_log(@"b2l-springboard-v7 loaded");
+    b2l_log(@"b2l-springboard-v8 loaded");
     hook_module_caps();
     hook_status_bar();
     _dyld_register_func_for_add_image(image_added);

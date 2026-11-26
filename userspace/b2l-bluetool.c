@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
-/* b2l-bluetool-v2.dylib:
+/* b2l-bluetool-v3.dylib:
  * 1) Stand-in for Apple's BlueTool (/usr/sbin/BlueTool) on com.apple.BlueTool XPC.
  * 2) Platform identity shim for /usr/sbin/bluetoothd 23G90 (DA7ADF00-...):
  *    answers true to MGIsDeviceOneOfType at the platform 0x16 creation site
@@ -137,32 +137,35 @@ static int b2l_getopt(int argc, char *const argv[], const char *optstring)
 	return getopt(argc, argv, optstring);
 }
 
-/* Check LC_UUID of image 0 matches bluetoothd 23G90 (DA7ADF00-04FA-3EE0-8782-E336E0982712). */
+/* Check all loaded images for bluetoothd 23G90 (DA7ADF00-04FA-3EE0-8782-E336E0982712). */
 static uintptr_t bluetoothd_base_if_matched(void)
 {
 	static int checked;
 	static uintptr_t base;
 	if (checked) return base;
 	checked = 1;
-	const struct mach_header_64 *mh = (const struct mach_header_64 *)_dyld_get_image_header(0);
-	if (!mh || mh->magic != MH_MAGIC_64) return 0;
 	static const uint8_t want[16] = {
 		0xda, 0x7a, 0xdf, 0x00, 0x04, 0xfa, 0x3e, 0xe0,
 		0x87, 0x82, 0xe3, 0x36, 0xe0, 0x98, 0x27, 0x12
 	};
-	const uint8_t *p = (const uint8_t *)(mh + 1);
-	for (uint32_t i = 0; i < mh->ncmds; i++) {
-		const struct load_command *lc = (const struct load_command *)p;
-		if (lc->cmd == LC_UUID && lc->cmdsize >= sizeof(struct uuid_command)) {
-			const struct uuid_command *uc = (const struct uuid_command *)lc;
-			if (!memcmp(uc->uuid, want, 16)) {
-				base = (uintptr_t)mh;
+	for (uint32_t img = 0, cnt = _dyld_image_count(); img < cnt; img++) {
+		const struct mach_header_64 *mh = (const struct mach_header_64 *)_dyld_get_image_header(img);
+		if (!mh || mh->magic != MH_MAGIC_64 || mh->filetype != MH_EXECUTE) continue;
+		const uint8_t *p = (const uint8_t *)(mh + 1);
+		for (uint32_t i = 0; i < mh->ncmds; i++) {
+			const struct load_command *lc = (const struct load_command *)p;
+			if (lc->cmd == LC_UUID && lc->cmdsize >= sizeof(struct uuid_command)) {
+				const struct uuid_command *uc = (const struct uuid_command *)lc;
+				if (!memcmp(uc->uuid, want, 16)) {
+					base = (uintptr_t)mh;
+					return base;
+				}
+				break;
 			}
-			break;
+			p += lc->cmdsize;
 		}
-		p += lc->cmdsize;
 	}
-	return base;
+	return 0;
 }
 
 static bool (*orig_MGIsDeviceOneOfType)(const int *types);
@@ -178,7 +181,7 @@ static bool b2l_MGIsDeviceOneOfType(const int *types)
 			static int logged;
 			if (!logged) {
 				logged = 1;
-				os_log(OS_LOG_DEFAULT, "b2l-bluetool: bluetoothd platform 0x16 matched at +0x432160");
+				os_log_error(OS_LOG_DEFAULT, "b2l-bluetool: bluetoothd platform 0x16 matched at +0x432160");
 			}
 			return true;
 		}
@@ -204,9 +207,9 @@ static void b2l_bluetool_ctor(void)
 			*p = (void *)b2l_MGIsDeviceOneOfType;
 		}
 		vm_protect(mach_task_self(), (vm_address_t)page, (vm_size_t)page_sz, FALSE, VM_PROT_READ);
-		os_log(OS_LOG_DEFAULT, "b2l-bluetool: hooked bluetoothd GOT slot +0xac8c38");
+		os_log_error(OS_LOG_DEFAULT, "b2l-bluetool: hooked bluetoothd GOT slot +0xac8c38 (mh=0x%lx)", (unsigned long)mh);
 	} else {
-		os_log(OS_LOG_DEFAULT, "b2l-bluetool: vm_protect failed kr=%d", kr);
+		os_log_error(OS_LOG_DEFAULT, "b2l-bluetool: vm_protect failed kr=%d", kr);
 	}
 }
 

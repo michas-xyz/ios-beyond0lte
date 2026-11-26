@@ -61,7 +61,7 @@ b2l_exec_render_env(struct image_params *imgp, int pointer_size)
  * AMFI policy answers call 90 for this pid (b2l_amfi_constraint.h).
  * Kill switch: boot-arg b2l_sb_inject=0. */
 #define B2L_SB_PATH "/System/Library/CoreServices/SpringBoard.app/SpringBoard"
-#define B2L_SB_LIB  "/usr/local/lib/b2l-springboard-v7.dylib"
+#define B2L_SB_LIB  "/usr/local/lib/b2l-springboard-v8.dylib"
 int b2l_sb_dyld_pid = -1;
 int b2l_bb_dyld_pid = -1;      /* B1L-0031: backboardd given the EAGL bridge */
 #define B2L_BB_PATH "/usr/libexec/backboardd"

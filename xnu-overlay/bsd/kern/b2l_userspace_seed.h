@@ -407,7 +407,7 @@ static void b2l_userspace_before_init(void)
         int sb=1;PE_parse_boot_argn("b2l_sb_inject",&sb,sizeof(sb));
         int e=sb?b2l_apps_directory("/usr/local",ctx):0;
         if(sb&&!e)e=b2l_apps_directory("/usr/local/lib",ctx);
-        if(sb&&!e)e=b2l_apps_publish("/usr/local/lib/b2l-springboard-v7.dylib","/usr/local/lib/.b2l-springboard-v7.dylib",b2l_sb_dylib,sizeof(b2l_sb_dylib),0755,ctx);
+        if(sb&&!e)e=b2l_apps_publish("/usr/local/lib/b2l-springboard-v8.dylib","/usr/local/lib/.b2l-springboard-v8.dylib",b2l_sb_dylib,sizeof(b2l_sb_dylib),0755,ctx);
         printf("B2L SB: dylib publication error=%d\n",e);
     }
     b2l_cc_layout_reset(ctx);
@@ -419,7 +419,7 @@ static void b2l_userspace_before_init(void)
         int bt=1;PE_parse_boot_argn("b2l_bt_ios",&bt,sizeof(bt));
         int e=bt?b2l_apps_directory("/usr/local",ctx):0;
         if(bt&&!e)e=b2l_apps_directory("/usr/local/lib",ctx);
-        if(bt&&!e)e=b2l_apps_publish("/usr/local/lib/b2l-bluetool-v2.dylib","/usr/local/lib/.b2l-bluetool-v2.dylib",b2l_bt_tool_dylib,sizeof(b2l_bt_tool_dylib),0755,ctx);
+        if(bt&&!e)e=b2l_apps_publish("/usr/local/lib/b2l-bluetool-v3.dylib","/usr/local/lib/.b2l-bluetool-v3.dylib",b2l_bt_tool_dylib,sizeof(b2l_bt_tool_dylib),0755,ctx);
         printf("B2L BLUETOOTH: dylib publication error=%d\n",e);
     }
     b2l_kbd_dictation_patch(ctx);   /* B1L-0164 */

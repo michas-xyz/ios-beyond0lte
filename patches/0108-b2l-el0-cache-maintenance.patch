@@ -1,6 +1,6 @@
 --- a/osfmk/arm64/sleh.c	2026-11-14 16:42:31
 +++ b/osfmk/arm64/sleh.c	2026-11-14 17:09:24
-@@ -2854,6 +2854,53 @@
+@@ -2854,6 +2854,55 @@
  
  
 +#if defined(ARM64_BOARD_CONFIG_B2L)
@@ -50,7 +50,9 @@
 +}
 +#endif
 +
++#if !defined(ARM64_BOARD_CONFIG_B2L)
  __attribute__((noreturn))
++#endif
  static void
  handle_msr_trap(arm_saved_state_t *state, uint64_t esr)
  {
