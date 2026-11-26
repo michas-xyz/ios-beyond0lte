@@ -109,6 +109,8 @@ b2l_surface_set_scanout_shape(uint32_t width, uint32_t height, uint32_t bytesPer
 	b2l_scanout_w = width;
 }
 
+static void b2l_surface_init_lock(void);
+
 void
 b2l_surface_prealloc_scanout(uint32_t width, uint32_t height, uint32_t bytesPerRow, unsigned count)
 {
