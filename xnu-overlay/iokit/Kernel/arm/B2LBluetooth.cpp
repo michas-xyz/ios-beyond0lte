@@ -475,6 +475,7 @@ void
 B2LBluetooth::relayLoop(void)
 {
 	uint8_t rxbuf[256];
+	unsigned idle = 0;
 	for (;;) {
 		bool did = false;
 		if (g_bt_tx_lock) {
@@ -500,8 +501,11 @@ B2LBluetooth::relayLoop(void)
 		if (rxn > 0 && g_bt_ctl && unit) {
 			ctl_enqueuedata(g_bt_ctl, unit, rxbuf, rxn, 0);
 		}
-		if (!did) {
-			IOSleep(1);
+		if (did) {
+			idle = 0;
+		} else {
+			if (idle < 50) idle++;
+			IOSleep(idle >= 50 ? 10 : 2);
 		}
 	}
 }
@@ -670,12 +674,12 @@ B2LBluetooth::btThread(void *arg, wait_result_t)
 			IOSleep(250);
 			waited += 250;
 		}
-		IOSleep(30000);
+		IOSleep(1000);
 		while (self->level >= 3 && b2l_bt_fw_state == 0 && waited < 660000) {   /* fetched just after wifi */
 			IOSleep(250);
 			waited += 250;
 		}
-		b2l_diag_record("B2L BLUETOOTH: start after wifi seed %d (%u ms) + 30 s, bt.hcd state %d (%zu bytes)\n",
+		b2l_diag_record("B2L BLUETOOTH: start after wifi seed %d (%u ms) + 1 s, bt.hcd state %d (%zu bytes)\n",
 		    b2l_wifi_fw_state, waited, b2l_bt_fw_state, b2l_bt_hcd_len);
 		self->uart = (volatile uint8_t *)ml_io_map(BT_UART_PHYS, 0x1000);
 		if (self->uart) {

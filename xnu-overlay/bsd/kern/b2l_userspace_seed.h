@@ -407,7 +407,7 @@ static void b2l_userspace_before_init(void)
         int sb=1;PE_parse_boot_argn("b2l_sb_inject",&sb,sizeof(sb));
         int e=sb?b2l_apps_directory("/usr/local",ctx):0;
         if(sb&&!e)e=b2l_apps_directory("/usr/local/lib",ctx);
-        if(sb&&!e)e=b2l_apps_publish("/usr/local/lib/b2l-springboard-v5.dylib","/usr/local/lib/.b2l-springboard-v5.dylib",b2l_sb_dylib,sizeof(b2l_sb_dylib),0755,ctx);
+        if(sb&&!e)e=b2l_apps_publish("/usr/local/lib/b2l-springboard-v6.dylib","/usr/local/lib/.b2l-springboard-v6.dylib",b2l_sb_dylib,sizeof(b2l_sb_dylib),0755,ctx);
         printf("B2L SB: dylib publication error=%d\n",e);
     }
     b2l_cc_layout_reset(ctx);

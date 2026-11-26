@@ -80,9 +80,38 @@ rsync -a "$repo_root/xnu-overlay/" "$xnu_path/"
 perl -ni -e 'print unless m{b2l_pacga_(qarma5|siphash)}' "$xnu_path/bsd/conf/files" "$xnu_path/osfmk/conf/files"
 # Register additional B2L services and crypto descriptors in conf/files
 grep -q "b2l_mali_core.c" "$xnu_path/bsd/conf/files" || echo "bsd/dev/b2l_mali_core.c optional b2l" >> "$xnu_path/bsd/conf/files"
+grep -q "b2l_hakios_net.c" "$xnu_path/bsd/conf/files" || echo "bsd/dev/b2l_hakios_net.c optional b2l" >> "$xnu_path/bsd/conf/files"
+grep -q "b2l_hakios_sta.c" "$xnu_path/bsd/conf/files" || echo "bsd/dev/b2l_hakios_sta.c optional b2l" >> "$xnu_path/bsd/conf/files"
+grep -q "b2l_hakios_apple80211.c" "$xnu_path/bsd/conf/files" || echo "bsd/dev/b2l_hakios_apple80211.c optional b2l" >> "$xnu_path/bsd/conf/files"
+grep -q "b2l_wpa.c" "$xnu_path/bsd/conf/files" || echo "bsd/dev/b2l_wpa.c optional b2l" >> "$xnu_path/bsd/conf/files"
 grep -q "B2LMaliService.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LMaliService.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
 grep -q "B2LMetalAccel.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LMetalAccel.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
 grep -q "B2LBluetooth.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LBluetooth.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
+grep -q "B2LWifi.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LWifi.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
+grep -q "B2LHakiosWLAN.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LHakiosWLAN.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
+python3 - "$xnu_path/iokit/KernelConfigTables.cpp" <<'PY'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+s = p.read_text()
+if "B2LWifi" not in s or "B2LBluetooth" not in s:
+    anchor = '#endif\n    "   {"\n    "     \'IOClass\'         = IOPanicPlatform;"'
+    if anchor not in s:
+        raise SystemExit("KernelConfigTables anchor not found")
+    add = (
+        '    "   {"\n'
+        '    "     \'IOClass\' = B2LWifi;"\n'
+        '    "     \'IOProviderClass\' = IOResources;"\n'
+        '    "     \'IOMatchCategory\' = B2LWifi;"\n'
+        '    "   },"\n'
+        '    "   {"\n'
+        '    "     \'IOClass\' = B2LBluetooth;"\n'
+        '    "     \'IOProviderClass\' = IOResources;"\n'
+        '    "     \'IOMatchCategory\' = B2LBluetooth;"\n'
+        '    "   },"\n'
+    )
+    p.write_text(s.replace(anchor, add + anchor, 1))
+PY
 grep -q "b2l_prof.c" "$xnu_path/osfmk/conf/files" || echo "osfmk/arm64/b2l_prof.c optional b2l" >> "$xnu_path/osfmk/conf/files"
 grep -q "b2l_ccsha1_ltc.c" "$xnu_path/osfmk/conf/files" || echo "osfmk/corecrypto/b2l_ccsha1_ltc.c optional b2l" >> "$xnu_path/osfmk/conf/files"
 python3 "$repo_root/scripts/build-userspace-bootstrap.py" --output "$xnu_path/bsd/kern/b2l_userspace_payload.h"

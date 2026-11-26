@@ -248,6 +248,21 @@ static void hook_status_bar(void)
     vp_was = (Class (*)(id, SEL, id, id))method_setImplementation(meth, (IMP)vp_override);
     done = YES;
     b2l_log([NSString stringWithFormat:@"%@ visualProviderSubclassForScreen: hooked", NSStringFromClass(c)]);
+    unsigned int cnt = 0;
+    Class *list = objc_copyClassList(&cnt);
+    if (list) {
+        NSMutableString *vp = [NSMutableString stringWithString:@"statusBar classes:"];
+        unsigned logged_cnt = 0;
+        for (unsigned int i = 0; i < cnt && logged_cnt < 30; i++) {
+            const char *nm = class_getName(list[i]);
+            if (nm && strstr(nm, "StatusBarVisualProvider")) {
+                [vp appendFormat:@" %s", nm];
+                logged_cnt++;
+            }
+        }
+        b2l_log(vp);
+        free(list);
+    }
 }
 static void image_added(const struct mach_header *mh, intptr_t slide)
 {
@@ -258,7 +273,7 @@ static void image_added(const struct mach_header *mh, intptr_t slide)
 
 __attribute__((constructor)) static void b2l_springboard_init(void)
 {
-    b2l_log(@"b2l-springboard-v5 loaded");
+    b2l_log(@"b2l-springboard-v6 loaded");
     hook_module_caps();
     hook_status_bar();
     _dyld_register_func_for_add_image(image_added);
