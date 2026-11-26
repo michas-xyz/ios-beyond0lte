@@ -69,6 +69,7 @@ B2LSurface *b2l_surface_create_physical(uint64_t phys, uint32_t width,
 /* B1L-0096: the panel's size and format, set by the display (B2LFramebuffer.cpp): a surface of exactly that, made by
  * backboardd, is given physically contiguous write-combined memory the display can scan out (at most a few). */
 void b2l_surface_set_scanout_shape(uint32_t width, uint32_t height, uint32_t bytesPerRow, bool contiguous);
+void b2l_surface_prealloc_scanout(uint32_t width, uint32_t height, uint32_t bytesPerRow, unsigned count);
 
 /* B1L-0097: an ordinary (cached) surface of the given shape, published in the table: the display's default surface,
  * so that nothing draws into the memory the panel is reading */

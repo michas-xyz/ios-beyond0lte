@@ -414,8 +414,16 @@ static volatile uint32_t g_bt_data_unit;
 static unsigned g_bt_ios_tx_cnt;
 
 static errno_t
-bt_ctl_connect(kern_ctl_ref kctlref __unused, struct sockaddr_ctl *sac __unused, void **unitinfo __unused)
+bt_ctl_connect(kern_ctl_ref kctlref __unused, struct sockaddr_ctl *sac, void **unitinfo __unused)
 {
+	uint32_t u = sac ? sac->sc_unit : 0;
+	if (g_bt_tx_lock) {
+		IOLockLock(g_bt_tx_lock);
+		g_bt_tx_head = g_bt_tx_tail = 0;
+		IOLockUnlock(g_bt_tx_lock);
+	}
+	g_bt_data_unit = u;
+	b2l_diag_record("B2L BLUETOOTH H4: client connected (unit %u)\n", u);
 	return 0;
 }
 
@@ -425,6 +433,11 @@ bt_ctl_disconnect(kern_ctl_ref kctlref __unused, u_int32_t unit, void *unitinfo 
 	if (g_bt_data_unit == unit) {
 		g_bt_data_unit = 0;
 	}
+	if (g_bt_tx_lock) {
+		IOLockLock(g_bt_tx_lock);
+		g_bt_tx_head = g_bt_tx_tail = 0;
+		IOLockUnlock(g_bt_tx_lock);
+	}
 	return 0;
 }
 
@@ -433,14 +446,21 @@ bt_ctl_send(kern_ctl_ref kctlref __unused, u_int32_t unit, void *unitinfo __unus
 {
 	if (g_bt_data_unit != unit) {
 		g_bt_data_unit = unit;
-		b2l_diag_record("B2L BLUETOOTH H4: client connected (unit %u)\n", unit);
+		b2l_diag_record("B2L BLUETOOTH H4: client tx unit %u\n", unit);
 	}
 	if (g_bt_tx_lock) {
+		uint8_t first[8] = { 0 };
+		size_t fn = 0;
+		size_t total = 0;
 		IOLockLock(g_bt_tx_lock);
 		for (mbuf_t cur = m; cur; cur = mbuf_next(cur)) {
 			const uint8_t *p = (const uint8_t *)mbuf_data(cur);
 			size_t n = mbuf_len(cur);
 			for (size_t i = 0; i < n; i++) {
+				if (fn < sizeof(first)) {
+					first[fn++] = p[i];
+				}
+				total++;
 				unsigned nxt = (g_bt_tx_head + 1u) % BT_TX_RING_SZ;
 				if (nxt != g_bt_tx_tail) {
 					g_bt_tx_ring[g_bt_tx_head] = p[i];
@@ -448,9 +468,10 @@ bt_ctl_send(kern_ctl_ref kctlref __unused, u_int32_t unit, void *unitinfo __unus
 				}
 			}
 		}
-		if (g_bt_ios_tx_cnt < 8) {
+		if (g_bt_ios_tx_cnt < 12) {
 			g_bt_ios_tx_cnt++;
-			b2l_diag_record("B2L BLUETOOTH: iOS sends HCI (%u)\n", g_bt_ios_tx_cnt);
+			b2l_diag_record("B2L BLUETOOTH: iOS TX #%u (%zu B): %02x %02x %02x %02x\n",
+			    g_bt_ios_tx_cnt, total, first[0], first[1], first[2], first[3]);
 		}
 		IOLockUnlock(g_bt_tx_lock);
 	}
@@ -510,7 +531,16 @@ B2LBluetooth::relayLoop(void)
 		}
 		uint32_t unit = g_bt_data_unit;
 		if (rxn > 0 && g_bt_ctl && unit) {
-			ctl_enqueuedata(g_bt_ctl, unit, rxbuf, rxn, 0);
+			errno_t re = ctl_enqueuedata(g_bt_ctl, unit, rxbuf, rxn, 0);
+			static unsigned rx_logged, rx_errs;
+			if (re != 0 && rx_errs < 8) {
+				rx_errs++;
+				b2l_diag_record("B2L BLUETOOTH: ctl_enqueuedata err %d (%u B)\n", re, rxn);
+			} else if (re == 0 && rx_logged < 12) {
+				rx_logged++;
+				b2l_diag_record("B2L BLUETOOTH: chip RX #%u (%u B): %02x %02x %02x %02x\n",
+				    rx_logged, rxn, rxbuf[0], rxn > 1 ? rxbuf[1] : 0, rxn > 2 ? rxbuf[2] : 0, rxn > 3 ? rxbuf[3] : 0);
+			}
 		}
 		if (did) {
 			idle = 0;
@@ -607,6 +637,11 @@ B2LBluetooth::hciTest(uint32_t rate)
 					struct kern_ctl_reg reg;
 					bzero(&reg, sizeof(reg));
 					strlcpy(reg.ctl_name, "com.apple.uart.bluetooth", sizeof(reg.ctl_name));
+#ifdef CTL_FLAG_REG_SOCK_STREAM
+					reg.ctl_flags = CTL_FLAG_REG_SOCK_STREAM;
+#else
+					reg.ctl_flags = 0x4u;   /* CTL_FLAG_REG_SOCK_STREAM */
+#endif
 					reg.ctl_sendsize = 32768;
 					reg.ctl_recvsize = 32768;
 					reg.ctl_connect = bt_ctl_connect;

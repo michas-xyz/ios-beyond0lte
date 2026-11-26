@@ -189,6 +189,10 @@ AppleCLCD::start(IOService *provider)
 	if (fSurface != NULL && !fScaled) {   /* B1L-0096 */
 		b2l_zc_init(fPhys);
 		b2l_surface_set_scanout_shape(fWidth, fHeight, fRowBytes, b2l_zc_active());
+		if (b2l_zc_active()) {
+			uint32_t poolBpr = (fRowBytes + 63u) & ~63u;
+			b2l_surface_prealloc_scanout(fLogicalW, fLogicalH, poolBpr, 2);
+		}
 	}
 	/* B1L-0097: backboardd drew into the panel memory itself when given it as the default surface -- every element seen
 	 * appearing one after the other. It gets ordinary memory of the same shape, shown like any other surface.
@@ -339,7 +343,6 @@ AppleCLCD::swap(const uint8_t *rec)
 			OSSafeReleaseNULL(s);
 			continue;
 		}
-		(void)b2l_zc_show(fPhys, fRowBytes);   /* a copy goes to the panel memory: the display reads that again */
 		uintptr_t src = s->kernelAddress();
         if(src && s->memory && s->bytesPerElement==4 && s->elementWidth==1 && s->elementHeight==1 &&
             s->pixelFormat==B2L_FB_FORMAT_BGRA) {
@@ -353,10 +356,13 @@ AppleCLCD::swap(const uint8_t *rec)
                 b2l_blit((void*)fPixels,(uint64_t)fRowBytes*fHeight,fWidth,fHeight,fRowBytes,
                 (const void*)src,s->memory->getLength(),s->width,s->height,s->bytesPerRow,s->offset,
                 sx,sy,dx,dy,w,h);
-            if(shown&&!fConsolePaused){b2l_early_gui_present();fConsolePaused=true;IOLog("B2L FB: first IOSurface frame copied to physical scanout\n");}
             __asm__ volatile("dsb sy":::"memory");
             b2l_perf_note(B2L_PERF_BLIT, mach_absolute_time() - b2l_t0, (uint64_t)fRowBytes * (uint64_t)fHeight);
             IOLockUnlock(fLock);
+            if(shown){
+                (void)b2l_zc_show(fPhys, fRowBytes);   /* flip DECON to panel memory only AFTER fPixels copy is complete */
+                if(!fConsolePaused){b2l_early_gui_present();fConsolePaused=true;IOLog("B2L FB: first IOSurface frame copied to physical scanout\n");}
+            }
         }
 
 		s->release();

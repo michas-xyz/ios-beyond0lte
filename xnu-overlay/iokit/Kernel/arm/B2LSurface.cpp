@@ -93,6 +93,13 @@ static uint32_t b2l_scanout_w, b2l_scanout_h, b2l_scanout_bpr;
 static bool b2l_scanout_contig;   /* B1L-0097: contiguous memory only when the display can flip */
 static volatile SInt32 b2l_scanout_count;
 
+#define B2L_SCANOUT_POOL_MAX 3
+static struct {
+	IOBufferMemoryDescriptor *mem;
+	uint64_t phys;
+	uint32_t size;
+} b2l_scanout_pool[B2L_SCANOUT_POOL_MAX];
+
 void
 b2l_surface_set_scanout_shape(uint32_t width, uint32_t height, uint32_t bytesPerRow, bool contiguous)
 {
@@ -100,6 +107,50 @@ b2l_surface_set_scanout_shape(uint32_t width, uint32_t height, uint32_t bytesPer
 	b2l_scanout_h = height;
 	b2l_scanout_bpr = bytesPerRow;
 	b2l_scanout_w = width;
+}
+
+void
+b2l_surface_prealloc_scanout(uint32_t width, uint32_t height, uint32_t bytesPerRow, unsigned count)
+{
+	if (!b2l_scanout_contig || width == 0 || height == 0 || bytesPerRow == 0) {
+		return;
+	}
+	b2l_surface_init_lock();
+	uint32_t allocSize = (uint32_t)round_page((uint64_t)bytesPerRow * height);
+	unsigned kept = 0;
+	for (unsigned i = 0; i < count && i < B2L_SCANOUT_POOL_MAX; i++) {
+		IOBufferMemoryDescriptor *mem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+		    kIODirectionInOut | kIOMemoryKernelUserShared | kIOMemoryPhysicallyContiguous |
+		    kIOMapWriteCombineCache, allocSize, 0x00000000FFFFF000ULL);
+		if (mem == NULL) {
+			break;
+		}
+		addr64_t phys = mem->getPhysicalSegment(0, NULL, kIOMemoryMapperNone);
+		if (phys == 0 || phys + allocSize > 0x100000000ULL) {
+			mem->release();
+			break;
+		}
+		bzero(mem->getBytesNoCopy(), allocSize);
+		IOLockLock(b2l_surface_lock);
+		bool placed = false;
+		for (unsigned s = 0; s < B2L_SCANOUT_POOL_MAX; s++) {
+			if (b2l_scanout_pool[s].mem == NULL) {
+				b2l_scanout_pool[s].mem = mem;
+				b2l_scanout_pool[s].phys = phys;
+				b2l_scanout_pool[s].size = allocSize;
+				placed = true;
+				kept++;
+				break;
+			}
+		}
+		IOLockUnlock(b2l_surface_lock);
+		if (!placed) {
+			mem->release();
+			break;
+		}
+	}
+	IOLog("B2L SURF: preallocated %u/%u contiguous scan-out buffers (%u bytes each)\n",
+	    kept, count, allocSize);
 }
 
 OSDefineMetaClassAndStructors(B2LSurface, OSObject);
@@ -805,17 +856,36 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
 			    s->bytesPerRow >= b2l_scanout_bpr && s->bytesPerRow <= b2l_scanout_bpr + 1024 && (s->bytesPerRow & 63) == 0 &&
 			    s->planeCount == 0 && s->pixelFormat == 0x42475241 &&
 			    s->bytesPerElement == 4 && strcmp(who, "backboardd") == 0 && b2l_scanout_count < 4) {
-				mem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
-				    kIODirectionInOut | kIOMemoryKernelUserShared | kIOMemoryPhysicallyContiguous |
-				    kIOMapWriteCombineCache, s->allocSize, 0x00000000FFFFF000ULL);
+				addr64_t phys = 0;
+				bool from_pool = false;
+				IOLockLock(b2l_surface_lock);
+				for (unsigned p = 0; p < B2L_SCANOUT_POOL_MAX; p++) {
+					if (b2l_scanout_pool[p].mem != NULL && b2l_scanout_pool[p].size >= s->allocSize) {
+						mem = b2l_scanout_pool[p].mem;
+						phys = b2l_scanout_pool[p].phys;
+						b2l_scanout_pool[p].mem = NULL;
+						b2l_scanout_pool[p].phys = 0;
+						b2l_scanout_pool[p].size = 0;
+						from_pool = true;
+						break;
+					}
+				}
+				IOLockUnlock(b2l_surface_lock);
+				if (mem == NULL) {
+					mem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+					    kIODirectionInOut | kIOMemoryKernelUserShared | kIOMemoryPhysicallyContiguous |
+					    kIOMapWriteCombineCache, s->allocSize, 0x00000000FFFFF000ULL);
+					if (mem != NULL) {
+						phys = mem->getPhysicalSegment(0, NULL, kIOMemoryMapperNone);
+					}
+				}
 				if (mem != NULL) {
-					addr64_t phys = mem->getPhysicalSegment(0, NULL, kIOMemoryMapperNone);
 					if (phys != 0 && phys + s->allocSize <= 0x100000000ULL) {
 						scanout = true;
 						s->scanoutPhys = phys;
 						OSIncrementAtomic(&b2l_scanout_count);
-						IOLog("B2L SURF: scan-out surface for backboardd at %#llx (%u bytes)\n",
-						    (unsigned long long)phys, s->allocSize);
+						IOLog("B2L SURF: scan-out surface for backboardd at %#llx (%u bytes, %s)\n",
+						    (unsigned long long)phys, s->allocSize, from_pool ? "pool" : "alloc");
 					} else {
 						mem->release();
 						mem = NULL;
