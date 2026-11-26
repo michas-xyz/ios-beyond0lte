@@ -1,7 +1,6 @@
 --- a/osfmk/arm64/sleh.c	2026-11-14 16:42:31
 +++ b/osfmk/arm64/sleh.c	2026-11-14 17:09:24
-@@ -2853,7 +2853,54 @@
- #endif /* __has_feature(ptrauth_calls) */
+@@ -2854,6 +2854,53 @@
  
  
 +#if defined(ARM64_BOARD_CONFIG_B2L)
