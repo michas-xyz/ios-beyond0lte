@@ -95,7 +95,7 @@ jobs:
   build-xnu:
     name: Build S10e XNU Mach-O Kernel
     needs: [test, build-metal]
-    runs-on: macos-latest
+    runs-on: macos-15
     env:
       B2L_BOARD: ${{ github.event.inputs.board || 'beyond0lte' }}
     steps:
