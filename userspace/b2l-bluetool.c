@@ -1,17 +1,20 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
-/* b2l-bluetool-v1.dylib:
+/* b2l-bluetool-v2.dylib:
  * 1) Stand-in for Apple's BlueTool (/usr/sbin/BlueTool) on com.apple.BlueTool XPC.
  * 2) Platform identity shim for /usr/sbin/bluetoothd 23G90 (DA7ADF00-...):
  *    answers true to MGIsDeviceOneOfType at the platform 0x16 creation site
  *    so bluetoothd does not crash on Unknown platform 0xffffffff at +0x31c.
  */
 #include <dispatch/dispatch.h>
+#include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <os/log.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <xpc/xpc.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <stdarg.h>
@@ -162,21 +165,52 @@ static uintptr_t bluetoothd_base_if_matched(void)
 	return base;
 }
 
+static bool (*orig_MGIsDeviceOneOfType)(const int *types);
+
 static bool b2l_MGIsDeviceOneOfType(const int *types)
 {
 	uintptr_t mh = bluetoothd_base_if_matched();
 	if (mh) {
-		uintptr_t ret = (uintptr_t)__builtin_return_address(0) - mh;
+		uintptr_t lr = (uintptr_t)__builtin_return_address(0) & 0x00007fffffffffffULL;
+		uintptr_t ret = lr - mh;
 		/* Platform 0x16 call site in bluetoothd 23G90 (DA7ADF00-...) */
 		if (ret == 0x432160) {
+			static int logged;
+			if (!logged) {
+				logged = 1;
+				os_log(OS_LOG_DEFAULT, "b2l-bluetool: bluetoothd platform 0x16 matched at +0x432160");
+			}
 			return true;
 		}
 	}
-	return MGIsDeviceOneOfType(types);
+	return orig_MGIsDeviceOneOfType ? orig_MGIsDeviceOneOfType(types) : MGIsDeviceOneOfType(types);
+}
+
+__attribute__((constructor))
+static void b2l_bluetool_ctor(void)
+{
+	uintptr_t mh = bluetoothd_base_if_matched();
+	if (!mh) return;
+	/* Patch __DATA_CONST.__auth_got slot (+0xac8c38) directly so arm64e bluetoothd always calls us. */
+	uintptr_t slot = mh + 0xac8c38;
+	uintptr_t page_sz = (uintptr_t)getpagesize();
+	uintptr_t page = slot & ~(page_sz - 1);
+	kern_return_t kr = vm_protect(mach_task_self(), (vm_address_t)page, (vm_size_t)page_sz, FALSE,
+	    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+	if (kr == KERN_SUCCESS) {
+		void **p = (void **)slot;
+		if (*p != (void *)b2l_MGIsDeviceOneOfType) {
+			orig_MGIsDeviceOneOfType = (bool (*)(const int *))(*p);
+			*p = (void *)b2l_MGIsDeviceOneOfType;
+		}
+		vm_protect(mach_task_self(), (vm_address_t)page, (vm_size_t)page_sz, FALSE, VM_PROT_READ);
+		os_log(OS_LOG_DEFAULT, "b2l-bluetool: hooked bluetoothd GOT slot +0xac8c38");
+	} else {
+		os_log(OS_LOG_DEFAULT, "b2l-bluetool: vm_protect failed kr=%d", kr);
+	}
 }
 
 __attribute__((used, section("__DATA,__interpose")))
 static const struct { const void *replacement, *replacee; } b2l_interpose[] = {
 	{ (const void *)b2l_getopt, (const void *)getopt },
-	{ (const void *)b2l_MGIsDeviceOneOfType, (const void *)MGIsDeviceOneOfType },
 };

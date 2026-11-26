@@ -4,7 +4,7 @@
 
 #define B2L_BT_TOOL_PATH "/usr/sbin/BlueTool"
 #define B2L_BT_DAEMON_PATH "/usr/sbin/bluetoothd"
-#define B2L_BT_LIB "/usr/local/lib/b2l-bluetool-v1.dylib"
+#define B2L_BT_LIB "/usr/local/lib/b2l-bluetool-v2.dylib"
 
 int b2l_bt_dyld_pid = -1;
 int b2l_btd_dyld_pid = -1;

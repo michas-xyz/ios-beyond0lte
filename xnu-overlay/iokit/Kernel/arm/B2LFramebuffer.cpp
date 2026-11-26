@@ -568,6 +568,8 @@ b2l_zc_init(uint64_t panel)
 	b2l_zc_on = want != 0 && (b2l_zc_src_size & 0xffff) != 0;
 	IOLog("B2L ZC: the panel memory is read through the base register at %#llx; zero-copy display %s\n",
 	    (unsigned long long)b2l_zc_base_pa, b2l_zc_on ? "ON" : "off (b2l_fb_zc=0)");
+	b2l_diag_record("B2L ZC: init base=%#llx src_size=%08x %s\n",
+	    (unsigned long long)b2l_zc_base_pa, b2l_zc_src_size, b2l_zc_on ? "ON" : "OFF");
 }
 
 static bool
@@ -591,7 +593,7 @@ b2l_zc_show(uint64_t phys, uint32_t bytesPerRow)
 	/* Wait for any pending DECON shadow update before programming the next scanout address, then wait
 	 * until DECON latches `phys` on TE. backboardd's zero-copy swapchain only has 2 buffers (surface 2 & 3),
 	 * so returning before DECON switches away from the previous buffer lets Mali overwrite it mid-scanout. */
-	for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 100; i++) {
+	for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 150; i++) {
 		IOSleep(1);
 	}
 	if ((req & B2L_DECON_UPDATE_BITS) == 0) {
@@ -602,7 +604,7 @@ b2l_zc_show(uint64_t phys, uint32_t bytesPerRow)
 		__asm__ volatile("dsb sy" ::: "memory");
 		b2l_zc_decon[B2L_DECON_UPDATE_REQ] = b2l_zc_decon[B2L_DECON_UPDATE_REQ] | B2L_DECON_UPDATE_BITS;
 		__asm__ volatile("dsb sy" ::: "memory");
-		for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 100; i++) {
+		for (int i = 0; ((req = b2l_zc_decon[B2L_DECON_UPDATE_REQ]) & B2L_DECON_UPDATE_BITS) != 0 && i < 150; i++) {
 			IOSleep(1);
 		}
 	}
@@ -612,14 +614,21 @@ b2l_zc_show(uint64_t phys, uint32_t bytesPerRow)
 		    b2l_zc_base[0x800 / 4], b2l_zc_base[(0x800 + 0x10 - 0x40) / 4]);
 	}
 	if ((req & B2L_DECON_UPDATE_BITS) != 0) {
-		/* not taken: back to the panel memory, and the copy from now on */
-		*b2l_zc_base = (uint32_t)b2l_zc_panel;
-		b2l_zc_base[(0x10 - 0x40) / 4] = b2l_zc_src_size;
-		b2l_zc_decon[B2L_DECON_UPDATE_REQ] = b2l_zc_decon[B2L_DECON_UPDATE_REQ] | B2L_DECON_UPDATE_BITS;
-		b2l_zc_on = false;
-		b2l_zc_shown = b2l_zc_panel;
-		IOLog("B2L ZC: DECON did not take the new address within 50 ms: zero-copy OFF, copy from now on\n");
-		return false;
+		if (b2l_zc_flips == 0) {
+			/* not taken on initial flip: back to the panel memory, and copy from now on */
+			*b2l_zc_base = (uint32_t)b2l_zc_panel;
+			b2l_zc_base[(0x10 - 0x40) / 4] = b2l_zc_src_size;
+			b2l_zc_decon[B2L_DECON_UPDATE_REQ] = b2l_zc_decon[B2L_DECON_UPDATE_REQ] | B2L_DECON_UPDATE_BITS;
+			b2l_zc_on = false;
+			b2l_zc_shown = b2l_zc_panel;
+			b2l_diag_record("B2L ZC: DECON initial flip timeout (req=%08x): OFF\n", req);
+			return false;
+		}
+		static unsigned zc_timeouts;
+		if (zc_timeouts < 8) {
+			zc_timeouts++;
+			b2l_diag_record("B2L ZC: transient timeout flip=%u req=%08x\n", b2l_zc_flips, req);
+		}
 	}
 	b2l_zc_flips++;
 	b2l_zc_shown = phys;

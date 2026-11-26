@@ -203,6 +203,26 @@ static void hook_module_caps(void)
     done = YES;
     b2l_log(@"CCSModuleMetadata requiredDeviceCapabilities: arm64e dropped");
 }
+static UIEdgeInsets (*sb_edge_insets_was)(id, SEL);
+static UIEdgeInsets sb_edge_insets(id self, SEL cmd)
+{
+    UIEdgeInsets r = sb_edge_insets_was ? sb_edge_insets_was(self, cmd) : UIEdgeInsetsZero;
+    static BOOL logged;
+    if (!logged) {
+        logged = YES;
+        b2l_log([NSString stringWithFormat:@"statusBar edgeInsets: {%.1f, %.1f, %.1f, %.1f} -> right +46",
+            (double)r.top, (double)r.left, (double)r.bottom, (double)r.right]);
+    }
+    r.right += 46.0;
+    return r;
+}
+static UIEdgeInsets (*sb_exp_insets_was)(id, SEL);
+static UIEdgeInsets sb_exp_insets(id self, SEL cmd)
+{
+    UIEdgeInsets r = sb_exp_insets_was ? sb_exp_insets_was(self, cmd) : UIEdgeInsetsZero;
+    r.right += 46.0;
+    return r;
+}
 static Class (*vp_was)(id, SEL, id, id);
 static Class vp_override(id self, SEL cmd, id screen, id info)
 {
@@ -248,6 +268,16 @@ static void hook_status_bar(void)
     vp_was = (Class (*)(id, SEL, id, id))method_setImplementation(meth, (IMP)vp_override);
     done = YES;
     b2l_log([NSString stringWithFormat:@"%@ visualProviderSubclassForScreen: hooked", NSStringFromClass(c)]);
+    Class split = objc_getClass("STUIStatusBarVisualProvider_Split1080");
+    if (!split) split = objc_getClass("_UIStatusBarVisualProvider_Split1080");
+    if (split) {
+        Method em = class_getInstanceMethod(split, NSSelectorFromString(@"edgeInsets"));
+        Method xm = class_getInstanceMethod(split, NSSelectorFromString(@"expandedEdgeInsets"));
+        if (em) sb_edge_insets_was = (UIEdgeInsets (*)(id, SEL))method_setImplementation(em, (IMP)sb_edge_insets);
+        if (xm) sb_exp_insets_was = (UIEdgeInsets (*)(id, SEL))method_setImplementation(xm, (IMP)sb_exp_insets);
+        b2l_log([NSString stringWithFormat:@"%@ edgeInsets=%d expandedEdgeInsets=%d",
+            NSStringFromClass(split), em != NULL, xm != NULL]);
+    }
     unsigned int cnt = 0;
     Class *list = objc_copyClassList(&cnt);
     if (list) {
@@ -273,7 +303,7 @@ static void image_added(const struct mach_header *mh, intptr_t slide)
 
 __attribute__((constructor)) static void b2l_springboard_init(void)
 {
-    b2l_log(@"b2l-springboard-v6 loaded");
+    b2l_log(@"b2l-springboard-v7 loaded");
     hook_module_caps();
     hook_status_bar();
     _dyld_register_func_for_add_image(image_added);

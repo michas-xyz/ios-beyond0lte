@@ -1,9 +1,9 @@
 --- a/osfmk/arm64/sleh.c	2026-11-14 16:42:31
 +++ b/osfmk/arm64/sleh.c	2026-11-14 17:09:24
-@@ -2854,6 +2854,53 @@
+@@ -2853,6 +2853,53 @@
+ #endif /* __has_feature(ptrauth_calls) */
  
  
- __attribute__((noreturn))
 +#if defined(ARM64_BOARD_CONFIG_B2L)
 +/*
 + * B2L: SCTLR_EL1.UCI is clear on this board (proc_reg.h), so EL0 cache maintenance by VA traps here.
@@ -51,6 +51,7 @@
 +}
 +#endif
 +
+ __attribute__((noreturn))
  static void
  handle_msr_trap(arm_saved_state_t *state, uint64_t esr)
  {
