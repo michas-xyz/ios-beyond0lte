@@ -23,7 +23,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define BT_CTL_NAME   "com.apple.uart.sk.bluetooth"
+#define BT_CTL_NAME   "com.apple.uart.bluetooth"
 #define BT_CTL_LOGOPT 0xb2
 #define BT_READY_WAIT_MS 60000
 

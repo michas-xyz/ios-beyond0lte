@@ -417,13 +417,15 @@ static errno_t
 bt_ctl_connect(kern_ctl_ref kctlref __unused, struct sockaddr_ctl *sac, void **unitinfo __unused)
 {
 	uint32_t u = sac ? sac->sc_unit : 0;
-	if (g_bt_tx_lock) {
-		IOLockLock(g_bt_tx_lock);
-		g_bt_tx_head = g_bt_tx_tail = 0;
-		IOLockUnlock(g_bt_tx_lock);
+	if (g_bt_data_unit == 0) {
+		if (g_bt_tx_lock) {
+			IOLockLock(g_bt_tx_lock);
+			g_bt_tx_head = g_bt_tx_tail = 0;
+			IOLockUnlock(g_bt_tx_lock);
+		}
+		g_bt_data_unit = u;
 	}
-	g_bt_data_unit = u;
-	b2l_diag_record("B2L BLUETOOTH H4: client connected (unit %u)\n", u);
+	b2l_diag_record("B2L BLUETOOTH H4: client connected (unit %u, active %u)\n", u, g_bt_data_unit);
 	return 0;
 }
 

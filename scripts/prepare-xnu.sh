@@ -89,15 +89,16 @@ grep -q "B2LMetalAccel.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/a
 grep -q "B2LBluetooth.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LBluetooth.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
 grep -q "B2LWifi.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LWifi.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
 grep -q "B2LHakiosWLAN.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LHakiosWLAN.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
+grep -q "B2LBattery.cpp" "$xnu_path/iokit/conf/files" || echo "iokit/Kernel/arm/B2LBattery.cpp optional iokitcpp b2l" >> "$xnu_path/iokit/conf/files"
 python3 - "$xnu_path/iokit/KernelConfigTables.cpp" <<'PY'
 import sys
 from pathlib import Path
 p = Path(sys.argv[1])
 s = p.read_text()
+anchor = '#endif\n    "   {"\n    "     \'IOClass\'         = IOPanicPlatform;"'
+if anchor not in s:
+    raise SystemExit("KernelConfigTables anchor not found")
 if "B2LWifi" not in s or "B2LBluetooth" not in s:
-    anchor = '#endif\n    "   {"\n    "     \'IOClass\'         = IOPanicPlatform;"'
-    if anchor not in s:
-        raise SystemExit("KernelConfigTables anchor not found")
     add = (
         '    "   {"\n'
         '    "     \'IOClass\' = B2LWifi;"\n'
@@ -110,7 +111,17 @@ if "B2LWifi" not in s or "B2LBluetooth" not in s:
         '    "     \'IOMatchCategory\' = B2LBluetooth;"\n'
         '    "   },"\n'
     )
-    p.write_text(s.replace(anchor, add + anchor, 1))
+    s = s.replace(anchor, add + anchor, 1)
+if "B2LBattery" not in s:
+    add_bat = (
+        '    "   {"\n'
+        '    "     \'IOClass\' = B2LBattery;"\n'
+        '    "     \'IOProviderClass\' = IOResources;"\n'
+        '    "     \'IOMatchCategory\' = B2LBattery;"\n'
+        '    "   },"\n'
+    )
+    s = s.replace(anchor, add_bat + anchor, 1)
+p.write_text(s)
 PY
 grep -q "b2l_prof.c" "$xnu_path/osfmk/conf/files" || echo "osfmk/arm64/b2l_prof.c optional b2l" >> "$xnu_path/osfmk/conf/files"
 grep -q "b2l_ccsha1_ltc.c" "$xnu_path/osfmk/conf/files" || echo "osfmk/corecrypto/b2l_ccsha1_ltc.c optional b2l" >> "$xnu_path/osfmk/conf/files"

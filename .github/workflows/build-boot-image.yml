@@ -46,7 +46,7 @@ jobs:
 
       - name: Run S10e Test Suite
         run: |
-          python -m unittest tests.test_b2l_board tests.test_make_board_platform tests.test_memory_profile tests.test_package_boot tests.test_ram_bounds tests.test_extract_firmware tests.test_prepare_boot_firmware tests.test_generate_metal_payload
+          python -m unittest tests.test_b2l_board tests.test_make_board_platform tests.test_memory_profile tests.test_package_boot tests.test_ram_bounds tests.test_extract_firmware tests.test_prepare_boot_firmware tests.test_generate_metal_payload tests.test_battery_fg
 
   build-metal:
     name: Build S10e B2LMetalv95 Driver
