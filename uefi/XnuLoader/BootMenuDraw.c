@@ -136,7 +136,8 @@ void b2l_menu_render(uint32_t *pixels, uint32_t stride, uint32_t width, uint32_t
 
     y += 60;
     if (v->status) {
-        centered(&c, &big, 1, y, v->status, TEXT);
+        const struct font *sf = len(v->status) * big.w > (unsigned)cw ? &small : &big;
+        centered(&c, sf, 1, y, v->status, TEXT);
     } else if (v->seconds_left) {
         number(line, "Booting iOS in ", v->seconds_left, v->seconds_left == 1 ? " second" : " seconds");
         centered(&c, &big, 1, y, line, TEXT);

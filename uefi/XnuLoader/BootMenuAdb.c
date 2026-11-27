@@ -327,6 +327,7 @@ typedef struct {
     UINT8               *ControlBuffer;
     UINT8               *RxBuffer;
     UINT8               *TxBuffer;
+    BOOLEAN              EpActive[4];
     UINT32               EpResource[4];
     UINT32               BulkMaxPacket;
     UINT8                ConfigValue;
@@ -547,7 +548,7 @@ SendEpCmd(UINTN Ep, UINT32 Cmd, UINT32 P0, UINT32 P1, UINT32 P2, UINT32 *OutCmd)
 STATIC EFI_STATUS
 StartXfer(UINTN Ep, EFI_PHYSICAL_ADDRESS BufAddr, UINT32 Len, UINT32 Type)
 {
-    if (Ep >= 4 || mAdb.EpResource[Ep] != 0) return EFI_ALREADY_STARTED;
+    if (Ep >= 4 || mAdb.EpActive[Ep]) return EFI_ALREADY_STARTED;
     B2L_DWC3_TRB *Trb = mAdb.EpTrb[Ep];
     EFI_PHYSICAL_ADDRESS TrbAddr = mAdb.DmaAddress + B2L_ADB_EP0_TRB_OFFSET + (Ep * 0x40U);
     ZeroMem(Trb, sizeof(*Trb));
@@ -560,7 +561,7 @@ StartXfer(UINTN Ep, EFI_PHYSICAL_ADDRESS BufAddr, UINT32 Len, UINT32 Type)
     EFI_STATUS St = SendEpCmd(Ep, DWC3_DEPCMD_STARTTRANSFER, (UINT32)(TrbAddr >> 32), (UINT32)TrbAddr, 0, &Cmd);
     if (!EFI_ERROR(St)) {
         mAdb.EpResource[Ep] = DWC3_DEPCMD_GET_RSC_IDX(Cmd);
-        if (mAdb.EpResource[Ep] == 0) return EFI_DEVICE_ERROR;
+        mAdb.EpActive[Ep]   = TRUE;
     }
     return St;
 }
@@ -568,9 +569,11 @@ StartXfer(UINTN Ep, EFI_PHYSICAL_ADDRESS BufAddr, UINT32 Len, UINT32 Type)
 STATIC VOID
 EndXfer(UINTN Ep)
 {
-    if (Ep >= 4 || mAdb.EpResource[Ep] == 0) return;
+    if (Ep >= 4 || !mAdb.EpActive[Ep]) return;
     SendEpCmd(Ep, DWC3_DEPCMD_ENDTRANSFER | DWC3_DEPCMD_HIPRI_FORCERM | DWC3_DEPCMD_PARAM(mAdb.EpResource[Ep]),
               0, 0, 0, NULL);
+    gBS->Stall(100);
+    mAdb.EpActive[Ep]   = FALSE;
     mAdb.EpResource[Ep] = 0;
 }
 
@@ -646,7 +649,7 @@ ConfigEp(UINTN Ep, UINT32 Type, UINT32 MaxPkt, BOOLEAN Modify)
 STATIC EFI_STATUS
 ArmEp0(VOID)
 {
-    if (mAdb.EpResource[0] != 0) return EFI_ALREADY_STARTED;
+    if (mAdb.EpActive[0]) return EFI_ALREADY_STARTED;
     ZeroMem(mAdb.ControlBuffer, B2L_ADB_EP0_MAX_PACKET);
     CleanInvalidateDcache(mAdb.ControlBuffer, B2L_ADB_EP0_MAX_PACKET);
     EFI_STATUS St = StartXfer(0, mAdb.DmaAddress + B2L_ADB_CONTROL_OFFSET,
@@ -658,7 +661,7 @@ ArmEp0(VOID)
 STATIC EFI_STATUS
 ArmBulkOut(VOID)
 {
-    if (!mAdb.Configured || mAdb.EpResource[2] != 0) return EFI_SUCCESS;
+    if (!mAdb.Configured || mAdb.EpActive[2]) return EFI_SUCCESS;
     CleanInvalidateDcache(mAdb.RxBuffer, B2L_ADB_RX_BYTES);
     return StartXfer(2, mAdb.DmaAddress + B2L_ADB_RX_OFFSET, B2L_ADB_RX_BYTES, DWC3_TRBCTL_NORMAL);
 }
@@ -859,6 +862,7 @@ HandleEp0Event(UINT32 Ev)
     if (Ep > 1) return;
 
     if (Type == DWC3_DEPEVT_XFERCOMPLETE) {
+        mAdb.EpActive[Ep]   = FALSE;
         mAdb.EpResource[Ep] = 0;
         CleanInvalidateDcache(mAdb.EpTrb[Ep], sizeof(B2L_DWC3_TRB));
         if (Ep == 0 && mAdb.Ep0State == EP0_SETUP_ARMED) {
@@ -881,17 +885,20 @@ HandleDeviceEvent(UINT32 Ev)
     if (((Ev >> 1) & 0x7FU) != 0) return;
     UINTN Type = (Ev >> 8) & 0xFU;
     if (Type == 1) { /* USB_RESET */
+        EndXfer(1);
         EndXfer(2);
         EndXfer(3);
-        mAdb.Configured   = FALSE;
-        mAdb.AdbConnected = FALSE;
-        mAdb.ConfigValue  = 0;
-        mAdb.RxState      = RX_WAIT_HEADER;
-        mAdb.PayloadHave  = 0;
+        mAdb.Configured    = FALSE;
+        mAdb.AdbConnected  = FALSE;
+        mAdb.ConfigValue   = 0;
+        mAdb.Ep0ThreeStage = FALSE;
+        mAdb.Ep0State      = EP0_SETUP_ARMED;
+        mAdb.RxState       = RX_WAIT_HEADER;
+        mAdb.PayloadHave   = 0;
         Dwc3Write(DWC3_DCFG, Dwc3Read(DWC3_DCFG) & ~DWC3_DCFG_DEVADDR_MASK);
         Dwc3Write(DWC3_DALEPENA, BIT0 | BIT1);
         SetStatus("ADB: USB bus reset");
-        if (mAdb.EpResource[0] == 0) ArmEp0();
+        if (!mAdb.EpActive[0]) ArmEp0();
     } else if (Type == 2) { /* CONNECT_DONE */
         UINT32 Spd = Dwc3Read(DWC3_DSTS) & DWC3_DSTS_CONNECTSPD_MASK;
         mAdb.BulkMaxPacket = (Spd == 0) ? 512U : 64U;
@@ -939,6 +946,7 @@ SendBulkInSync(CONST VOID *Data, UINT32 Len)
                 UINTN Ep   = (Ev >> 1) & 0x1FU;
                 UINTN Type = (Ev >> 6) & 0xFU;
                 if (Ep == 3 && Type == DWC3_DEPEVT_XFERCOMPLETE) {
+                    mAdb.EpActive[3]   = FALSE;
                     mAdb.EpResource[3] = 0;
                     return TRUE;
                 }
@@ -1059,6 +1067,7 @@ ProcessAdbMessage(CONST B2L_ADB_MSG *Msg, CONST UINT8 *Payload, UINT32 Len)
 STATIC VOID
 HandleBulkOutComplete(VOID)
 {
+    mAdb.EpActive[2]   = FALSE;
     mAdb.EpResource[2] = 0;
     CleanInvalidateDcache(mAdb.EpTrb[2], sizeof(B2L_DWC3_TRB));
     UINT32 Rem = mAdb.EpTrb[2]->Size & DWC3_TRB_SIZE_MASK;
