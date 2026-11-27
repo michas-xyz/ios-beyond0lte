@@ -2802,3 +2802,767 @@ if 'B1L-0185' not in u:
     open(q, 'w').write(u)
 print('air-b2l: recycled resource buffers zeroed')
 
+# B1L-0188/0189/0190: RenderBox phis of structs/arrays, phis of pointers walking one buffer,
+# select of pointers in one buffer, nir_lower_returns (fa16dhmha4), and Bifrost jump safety.
+t = sys.argv[1] + '/air_to_nir.c'
+u = open(t).read()
+def rep188(a, b, what):
+    global u
+    if u.count(a) != 1:
+        sys.exit('air-b2l: %s is not as expected (B1L-0188)' % what)
+    u = u.replace(a, b)
+
+rep188("""static bool
+resolve_pointer_phi(struct air_ctx *c, const struct air_inst *in, const bool *reachable)
+{
+   struct air_val *first = NULL;
+""", """/* B2L (B1L-0188): two pointers into one piece of byte-addressed memory, which differ by their offset alone */
+static bool
+b2l_ptr_same_memory(const struct air_ptr *a, const struct air_ptr *b)
+{
+   return a->class == b->class && a->binding == b->binding && a->is_image == b->is_image &&
+          (a->class == AIR_PTR_UBO || a->class == AIR_PTR_SSBO || a->class == AIR_PTR_SHARED ||
+           a->class == AIR_PTR_SCRATCH || a->class == AIR_PTR_CONSTANT_DATA);
+}
+
+/* B2L (B1L-0190): the first resolved pointer under a choice of pointers */
+static const struct air_val *
+b2l_ptr_leaf(const struct air_val *v)
+{
+   while (v && v->kind == AIR_VAL_PTR_SELECT && v->num_elems == 2)
+      v = v->elems[0];
+   return v && v->kind == AIR_VAL_PTR ? v : NULL;
+}
+
+/* B2L (B1L-0190): the byte offset of a pointer into `like`'s memory; a choice between two is a bcsel of theirs */
+static nir_def *
+b2l_ptr_offset(struct air_ctx *c, const struct air_val *v, const struct air_ptr *like)
+{
+   if (v && v->kind == AIR_VAL_PTR_SELECT && v->num_elems == 2) {
+      nir_def *x = b2l_ptr_offset(c, v->elems[0], like), *y = b2l_ptr_offset(c, v->elems[1], like);
+      return x && y ? nir_bcsel(&c->b, v->def, x, y) : NULL;
+   }
+   if (!v || v->kind != AIR_VAL_PTR || !b2l_ptr_same_memory(&v->ptr, like))
+      return NULL;
+   return v->ptr.offset ? v->ptr.offset : nir_imm_int(&c->b, 0);
+}
+
+/* B2L (B1L-0188): a phi of an aggregate is a tree of registers, one per leaf */
+static struct air_val *
+b2l_phi_agg_regs(struct air_ctx *c, nir_builder *entry, const struct air_type *t)
+{
+   if (t->kind == AIR_TYPE_STRUCT || t->kind == AIR_TYPE_ARRAY) {
+      unsigned n = t->kind == AIR_TYPE_STRUCT ? t->num_members : (unsigned)t->count;
+      struct air_val *v = air_val_agg(c, n);
+      for (unsigned i = 0; i < n; i++) {
+         v->elems[i] = b2l_phi_agg_regs(c, entry, t->kind == AIR_TYPE_STRUCT ? t->members[i] : t->elem);
+         if (!v->elems[i])
+            return NULL;
+      }
+      return v;
+   }
+   if (t->kind == AIR_TYPE_POINTER) {
+      air_error(c, "instruction: a phi of an aggregate that holds a pointer");
+      return NULL;
+   }
+   return air_val_ssa(c, nir_decl_reg(entry, air_nir_components(t), air_nir_bit_size(c, t), 0));
+}
+
+static struct air_val *
+b2l_phi_agg_load(struct air_ctx *c, const struct air_val *regs)
+{
+   if (regs->kind != AIR_VAL_AGG)
+      return air_val_ssa(c, nir_load_reg(&c->b, regs->def));
+   struct air_val *v = air_val_agg(c, regs->num_elems);
+   for (unsigned i = 0; i < regs->num_elems; i++)
+      v->elems[i] = b2l_phi_agg_load(c, regs->elems[i]);
+   return v;
+}
+
+static bool
+b2l_phi_agg_store(struct air_ctx *c, const struct air_val *regs, const struct air_val *val)
+{
+   if (!val || val->kind == AIR_VAL_NONE)
+      return true;   /* an undef member: nothing to carry */
+   if (regs->kind != AIR_VAL_AGG) {
+      if (val->kind != AIR_VAL_SSA || !val->def ||
+          val->def->num_components != nir_intrinsic_num_components(nir_reg_get_decl(regs->def)))
+         return air_error(c, "instruction: a phi of an aggregate one of whose leaves is not the value its type says");
+      nir_store_reg(&c->b, val->def, regs->def);
+      return true;
+   }
+   if (val->kind != AIR_VAL_AGG || val->num_elems != regs->num_elems)
+      return air_error(c, "instruction: a phi of an aggregate whose operand is not that aggregate");
+   for (unsigned i = 0; i < regs->num_elems; i++)
+      if (!b2l_phi_agg_store(c, regs->elems[i], val->elems[i]))
+         return false;
+   return true;
+}
+
+static bool
+resolve_pointer_phi(struct air_ctx *c, const struct air_inst *in, const bool *reachable)
+{
+   bool b2l_reg = false;   /* B2L (B1L-0188): the offset differs between edges, or comes over a loop edge */
+   struct air_val *first = NULL;
+""", 'resolve_pointer_phi')
+
+rep188("""      if (!e)
+         return air_error(c, "instruction: a phi of pointers whose operand comes in over "
+                             "a loop edge, so which resource it is depends on the "
+                             "iteration");
+      struct air_val *v = e->data;""", """      if (!e) {
+         b2l_reg = true;   /* B2L (B1L-0188): checked against the resource when the stores are made */
+         continue;
+      }
+      struct air_val *v = e->data;
+      if (v && v->kind == AIR_VAL_PTR_SELECT && b2l_ptr_leaf(v) &&
+          b2l_ptr_same_memory(&b2l_ptr_leaf(v)->ptr, &b2l_ptr_leaf(v)->ptr)) {   /* B2L (B1L-0190) */
+         b2l_reg = true;
+         if (!first)
+            first = (struct air_val *)b2l_ptr_leaf(v);
+         continue;
+      }""", 'the loop-edge refusal')
+
+rep188("""      else if (!same_ptr(&first->ptr, &v->ptr))
+         return air_error(c, "instruction: a phi between pointers that name different "
+                             "places, which would have to be chosen at run time");
+   }
+   if (!first)
+      first = null_tex;""", """      else if (!same_ptr(&first->ptr, &v->ptr)) {
+         if (!b2l_ptr_same_memory(&first->ptr, &v->ptr))
+            return air_error(c, "instruction: a phi between pointers that name different "
+                                "places, which would have to be chosen at run time");
+         b2l_reg = true;
+      }
+   }
+   if (b2l_reg) {   /* B2L (B1L-0188): one resource, the byte offset in a register */
+      if (!first || !b2l_ptr_same_memory(&first->ptr, &first->ptr))
+         return air_error(c, "instruction: a phi of pointers whose operand comes in over "
+                             "a loop edge, so which resource it is depends on the "
+                             "iteration");
+      nir_builder entry = nir_builder_at(nir_before_impl(c->b.impl));
+      nir_def *reg = nir_decl_reg(&entry, 1, 32, 0);
+      _mesa_hash_table_insert(c->phi_regs, in, reg);
+      struct air_ptr p = first->ptr;
+      p.offset = nir_load_reg(&c->b, reg);
+      air_set(c, &in->base, air_val_ptr(c, p));
+      return true;
+   }
+   if (!first)
+      first = null_tex;""", 'the different-places refusal')
+
+rep188("""         if (in->base.type->kind == AIR_TYPE_STRUCT ||
+             in->base.type->kind == AIR_TYPE_ARRAY)
+            return air_error(c, "instruction: a phi of %s, which NIR has no register for",
+                             in->base.type->kind == AIR_TYPE_STRUCT ? "a struct"
+                                                                    : "an array");
+""", """         if (in->base.type->kind == AIR_TYPE_STRUCT ||
+             in->base.type->kind == AIR_TYPE_ARRAY) {   /* B2L (B1L-0188): a tree of registers */
+            struct air_val *regs = b2l_phi_agg_regs(c, &entry, in->base.type);
+            if (!regs)
+               return false;
+            _mesa_hash_table_insert(c->phi_regs, in, regs);
+            continue;
+         }
+""", 'the aggregate phi refusal')
+
+rep188("""         struct hash_entry *e = _mesa_hash_table_search(c->phi_regs, in);
+         air_set(c, &in->base,
+                 air_val_ssa(c, nir_load_reg(&c->b, e->data)));""", """         struct hash_entry *e = _mesa_hash_table_search(c->phi_regs, in);
+         if (in->base.type->kind == AIR_TYPE_STRUCT || in->base.type->kind == AIR_TYPE_ARRAY) {
+            air_set(c, &in->base, b2l_phi_agg_load(c, e->data));   /* B2L (B1L-0188) */
+            continue;
+         }
+         air_set(c, &in->base,
+                 air_val_ssa(c, nir_load_reg(&c->b, e->data)));""", 'the phi load')
+
+rep188("""            c->b.cursor = *(nir_cursor *)ce->data;
+            nir_def *val = air_get_ssa(c, in->operands[k]);
+            if (!val)
+               return false;
+            nir_store_reg(&c->b, val, re->data);""", """            c->b.cursor = *(nir_cursor *)ce->data;
+            if (in->base.type->kind == AIR_TYPE_STRUCT || in->base.type->kind == AIR_TYPE_ARRAY) {
+               struct air_val *av = air_get(c, in->operands[k]);   /* B2L (B1L-0188) */
+               if (!av || !b2l_phi_agg_store(c, re->data, av))
+                  return false;
+               *(nir_cursor *)ce->data = c->b.cursor;
+               continue;
+            }
+            if (in->base.type->kind == AIR_TYPE_POINTER) {   /* B2L (B1L-0188): the offset of the same resource */
+               struct air_val *pv = air_get(c, in->operands[k]);
+               struct hash_entry *me = _mesa_hash_table_search(c->values, &in->base);
+               if (!pv)
+                  return false;
+               nir_def *po = me ? b2l_ptr_offset(c, pv, &((struct air_val *)me->data)->ptr) : NULL;
+               if (!po)
+                  return air_error(c, "instruction: a phi of pointers whose operand comes in over "
+                                      "a loop edge and names another resource");
+               nir_store_reg(&c->b, po, re->data);
+               *(nir_cursor *)ce->data = c->b.cursor;
+               continue;
+            }
+            nir_def *val = air_get_ssa(c, in->operands[k]);
+            if (!val)
+               return false;
+            nir_store_reg(&c->b, val, re->data);""", 'the phi store')
+
+open(t, 'w').write(u)
+print('air-b2l: phis of structs and of pointers into one buffer translated')
+
+pm = sys.argv[1] + '/air_metal.c'
+um = open(pm).read()
+a = """   finalize_for_gallium(clone, device->screen, device->ubo_base);
+
+   struct pipe_shader_state templ = { .type = PIPE_SHADER_IR_NIR, .ir.nir = clone };"""
+if um.count(a) != 1:
+    sys.exit('air-b2l: the stage compile is not as expected (B1L-0189)')
+um = um.replace(a, """   finalize_for_gallium(clone, device->screen, device->ubo_base);
+
+   /* B2L (B1L-0190): a return in the middle of a shader (RenderBox's fa16dhmha4) becomes structured control flow */
+   NIR_PASS(_, clone, nir_lower_returns);
+
+   /* B2L (B1L-0189): a jump Bifrost cannot emit, named instead of compiled */
+   {
+      const char *bad = NULL;
+      unsigned impls = 0;
+      nir_foreach_function_impl(impl, clone) {
+         impls++;
+         nir_foreach_block(block, impl) {
+            nir_instr *last = nir_block_last_instr(block);
+            if (!last || last->type != nir_instr_type_jump)
+               continue;
+            nir_jump_type jt = nir_instr_as_jump(last)->type;
+            if (jt != nir_jump_break && jt != nir_jump_continue) {
+               bad = jt == nir_jump_return ? "a return in the middle" : jt == nir_jump_halt ? "a halt" : "a goto";
+               continue;
+            }
+            nir_cf_node *n = block->cf_node.parent;
+            while (n && n->type != nir_cf_node_loop)
+               n = n->parent;
+            if (!n)
+               bad = "a break or continue outside a loop";
+         }
+      }
+      if (!bad && impls != 1)
+         bad = "more than one function left";
+      if (bad) {
+         say(why, why_size, "B2L: the %s stage %s has %s (%u functions), which the Mali's compiler cannot emit",
+             nir->info.stage == MESA_SHADER_VERTEX ? "vertex" : "fragment",
+             nir->info.name ? nir->info.name : "?", bad, impls);
+         ralloc_free(clone);
+         return NULL;
+      }
+   }
+
+   struct pipe_shader_state templ = { .type = PIPE_SHADER_IR_NIR, .ir.nir = clone };""")
+open(pm, 'w').write(um)
+
+q = sys.argv[1] + '/../../panfrost/compiler/bifrost_compile.c'
+u = open(q).read()
+if 'B1L-0189' not in u:
+    a = """   bi_block_add_successor(b->shader->current_block, branch->branch_target);
+   b->shader->current_block->unconditional_jumps = true;
+}"""
+    if u.count(a) != 1:
+        sys.exit('air-b2l: bi_emit_jump is not as expected (B1L-0189)')
+    u = u.replace(a, """   /* B2L (B1L-0189): a jump with no loop around it has no target; dropped rather than read through NULL */
+   if (!branch->branch_target) {
+      bi_remove_instruction(branch);
+      return;
+   }
+
+""" + a)
+    open(q, 'w').write(u)
+print('air-b2l: jumps the Mali cannot emit refused')
+
+# B1L-0257 (module): ignore LLVM GUIDLIST record 20 in air_module.c
+q = sys.argv[1] + '/air_module.c'
+u = open(q).read()
+a = """      case MODULE_CODE_VSTOFFSET:
+      case MODULE_CODE_HASH:
+      case MODULE_CODE_GCNAME:
+         break;"""
+if u.count(a) != 1:
+    sys.exit('air-b2l: air_module.c record switch is not as expected (B1L-0257)')
+u = u.replace(a, """      case MODULE_CODE_VSTOFFSET:
+      case MODULE_CODE_HASH:
+      case MODULE_CODE_GCNAME:
+      case 20:   /* B2L (B1L-0257): LLVM GUIDLIST record (ThinLTO only) */
+         break;""")
+open(q, 'w').write(u)
+print('air-b2l: LLVM GUIDLIST record 20 skipped')
+
+# B1L-0234 & B1L-0257: Linked function modules (MTL_VISIBLE_FN_REF) and constant scratch pointer slots
+q = sys.argv[1] + '/nir_air.h'
+u = open(q).read()
+a = """   bool library_wrapper;
+};"""
+if u.count(a) != 1:
+    sys.exit('air-b2l: air_to_nir_options is not as expected (B1L-0234)')
+u = u.replace(a, """   bool library_wrapper;
+   /* B2L (B1L-0234): extra AIR modules linked into this shader stage (custom_fn, etc.) */
+   const void *const *linked;
+   const size_t *linked_sizes;
+   unsigned num_linked;
+};""")
+open(q, 'w').write(u)
+
+q = sys.argv[1] + '/air_private.h'
+u = open(q).read()
+a = """   /* module-scope variables, by their air_global */
+   struct hash_table *globals;
+
+   char error[256];"""
+if u.count(a) != 1:
+    sys.exit('air-b2l: air_private.h is not as expected (B1L-0257)')
+u = u.replace(a, """   /* module-scope variables, by their air_global */
+   struct hash_table *globals;
+
+   /* B2L (B1L-0257): pointers stored into constant scratch offsets (e.g. RB::Layer) */
+   struct hash_table *ptr_slots;
+
+   char error[256];""")
+open(q, 'w').write(u)
+
+q = sys.argv[1] + '/air_to_nir.c'
+u = open(q).read()
+def rep234(a, b, what):
+    global u
+    if u.count(a) != 1:
+        sys.exit('air-b2l: %s is not as expected (B1L-0234/0257)' % what)
+    u = u.replace(a, b)
+
+rep234("""static bool
+translate_instruction(struct air_ctx *c, const struct air_inst *in)""", """static struct air_val b2l_ambiguous_ptr_slot;   /* B2L (B1L-0257) */
+
+static bool
+translate_instruction(struct air_ctx *c, const struct air_inst *in)""", 'b2l_ambiguous_ptr_slot decl')
+
+rep234("""   case AIR_OP_LOAD: {
+      struct air_val *p = air_get(c, in->operands[0]);
+      if (!p)
+         return false;
+      if (p->kind == AIR_VAL_PTR_SELECT) {""", """   /* B2L (B1L-0257): scratch pointer slots for linked/inlined callees storing pointers in local structs */
+   case AIR_OP_LOAD: {
+      struct air_val *p = air_get(c, in->operands[0]);
+      if (!p)
+         return false;
+      if (p->kind == AIR_VAL_PTR && p->ptr.class == AIR_PTR_SCRATCH &&
+          in->base.type && in->base.type->kind == AIR_TYPE_POINTER) {
+         nir_const_value oc[NIR_MAX_VEC_COMPONENTS];
+         uint32_t soff = 0;
+         if (!p->ptr.offset || b2l_eval_const(p->ptr.offset, oc, 0)) {
+            if (p->ptr.offset)
+               soff = (uint32_t)nir_const_value_as_uint(oc[0], p->ptr.offset->bit_size);
+            if (c->ptr_slots) {
+               struct hash_entry *se =
+                  _mesa_hash_table_search(c->ptr_slots, (const void *)(uintptr_t)(soff + 1));
+               if (se) {
+                  if (se->data == &b2l_ambiguous_ptr_slot)
+                     return air_error(c, "instruction: a load of a pointer whose stored slot is ambiguous");
+                  air_set(c, &in->base, se->data);
+                  return true;
+               }
+            }
+         }
+      }
+      if (p->kind == AIR_VAL_PTR_SELECT) {""", 'AIR_OP_LOAD pointer slot')
+
+rep234("""      struct air_val *sv = air_get(c, in->operands[0]);
+      if (!sv)
+         return false;
+      if (val_is_pointerish(sv))
+         return air_error(c, "instruction: a store of a pointer into memory, which this "
+                             "frontend has no address to write");""", """      struct air_val *sv = air_get(c, in->operands[0]);
+      if (!sv)
+         return false;
+      if (val_is_pointerish(sv)) {
+         /* B2L (B1L-0257): record a pointer stored into a constant local scratch slot */
+         if (p->kind == AIR_VAL_PTR && p->ptr.class == AIR_PTR_SCRATCH && sv->kind == AIR_VAL_PTR) {
+            nir_const_value oc[NIR_MAX_VEC_COMPONENTS];
+            uint32_t soff = 0;
+            if (!p->ptr.offset || b2l_eval_const(p->ptr.offset, oc, 0)) {
+               if (p->ptr.offset)
+                  soff = (uint32_t)nir_const_value_as_uint(oc[0], p->ptr.offset->bit_size);
+               if (!c->ptr_slots)
+                  c->ptr_slots = _mesa_pointer_hash_table_create(c->mem_ctx);
+               void *key = (void *)(uintptr_t)(soff + 1);
+               struct hash_entry *se = _mesa_hash_table_search(c->ptr_slots, key);
+               if (!se) {
+                  _mesa_hash_table_insert(c->ptr_slots, key, sv);
+               } else if (se->data != &b2l_ambiguous_ptr_slot) {
+                  struct air_val *prev = se->data;
+                  if (prev->kind != AIR_VAL_PTR || !same_ptr(&prev->ptr, &sv->ptr))
+                     se->data = &b2l_ambiguous_ptr_slot;
+               }
+               return true;
+            }
+         }
+         return air_error(c, "instruction: a store of a pointer into memory, which this "
+                             "frontend has no address to write");
+      }""", 'AIR_OP_STORE pointer slot')
+
+rep234("""   const struct air_function *f = NULL;
+   for (unsigned i = 0; i < c->m->num_functions; i++) {
+      const char *fname = c->m->functions[i]->base.name;
+      if (fname && !strcmp(fname, name)) {
+         f = c->m->functions[i];
+         break;
+      }
+   }""", """   const struct air_function *f = NULL;
+   for (unsigned i = 0; i < c->m->num_functions; i++) {
+      const char *fname = c->m->functions[i]->base.name;
+      if (fname && !strcmp(fname, name)) {
+         f = c->m->functions[i];
+         break;
+      }
+   }
+   /* B2L (B1L-0234): a linked visible function call `<name>.MTL_VISIBLE_FN_REF` resolves to `<name>` */
+   if ((!f || f->is_declaration || !f->num_blocks)) {
+      const char *suffix = ".MTL_VISIBLE_FN_REF";
+      size_t nlen = strlen(name);
+      size_t slen = strlen(suffix);
+      if (nlen > slen && !strcmp(name + nlen - slen, suffix)) {
+         size_t base_len = nlen - slen;
+         for (unsigned i = 0; i < c->m->num_functions; i++) {
+            const struct air_function *cand = c->m->functions[i];
+            const char *fname = cand->base.name;
+            if (!cand->is_declaration && cand->num_blocks && fname &&
+                strlen(fname) == base_len && !strncmp(fname, name, base_len) &&
+                cand->num_args == in->num_operands - 1) {
+               f = cand;
+               break;
+            }
+         }
+      }
+   }""", 'MTL_VISIBLE_FN_REF lookup')
+
+rep234("""   const char *read_error = NULL;
+   c.m = air_module_read(ctx, bitcode, size, &read_error);
+   if (!c.m) {
+      if (error)
+         *error = ralloc_asprintf(mem_ctx, "reader: %s", read_error);
+      ralloc_free(ctx);
+      return NULL;
+   }""", """   const char *read_error = NULL;
+   c.m = air_module_read(ctx, bitcode, size, &read_error);
+   if (!c.m) {
+      if (error)
+         *error = ralloc_asprintf(mem_ctx, "reader: %s", read_error);
+      ralloc_free(ctx);
+      return NULL;
+   }
+   /* B2L (B1L-0234): merge globals and defined functions from linked modules before planning */
+   if (options && options->num_linked && options->linked && options->linked_sizes) {
+      for (unsigned li = 0; li < options->num_linked; li++) {
+         if (!options->linked[li] || options->linked_sizes[li] < 4)
+            continue;
+         const char *lerr = NULL;
+         struct air_module *lm =
+            air_module_read(ctx, options->linked[li], options->linked_sizes[li], &lerr);
+         if (!lm) {
+            if (error)
+               *error = ralloc_asprintf(mem_ctx, "reader (linked %u): %s", li, lerr ? lerr : "bad bitcode");
+            ralloc_free(ctx);
+            return NULL;
+         }
+         if (lm->num_globals) {
+            unsigned base_g = c.m->num_globals;
+            c.m->globals = reralloc(ctx, c.m->globals, struct air_global *, base_g + lm->num_globals);
+            for (unsigned gi = 0; gi < lm->num_globals; gi++)
+               c.m->globals[base_g + gi] = lm->globals[gi];
+            c.m->num_globals = base_g + lm->num_globals;
+         }
+         if (lm->num_functions) {
+            unsigned added = 0;
+            for (unsigned fi = 0; fi < lm->num_functions; fi++)
+               if (!lm->functions[fi]->is_declaration && lm->functions[fi]->num_blocks)
+                  added++;
+            if (added) {
+               unsigned base_f = c.m->num_functions;
+               c.m->functions = reralloc(ctx, c.m->functions, struct air_function *, base_f + added);
+               for (unsigned fi = 0; fi < lm->num_functions; fi++)
+                  if (!lm->functions[fi]->is_declaration && lm->functions[fi]->num_blocks)
+                     c.m->functions[base_f++] = lm->functions[fi];
+               c.m->num_functions = base_f;
+            }
+         }
+      }
+   }""", 'merge linked modules')
+
+rep234("""   c.fns = _mesa_pointer_hash_table_create(ctx);""", """   c.fns = _mesa_pointer_hash_table_create(ctx);
+   c.ptr_slots = _mesa_pointer_hash_table_create(ctx);""", 'c.ptr_slots init')
+open(q, 'w').write(u)
+print('air-b2l: linked modules and scratch pointer slots translated')
+
+# B1L-0234 + B1L-0261 + B1L-0263 + B1L-0266 + B1L-0268 in air_metal.h and air_metal.c
+qh = sys.argv[1] + '/air_metal.h'
+uh = open(qh).read()
+ah = """int rwa_flush(struct rwa_device *device);"""
+if uh.count(ah) != 1:
+    sys.exit('air-b2l: air_metal.h is not as expected (B1L-0234/0268)')
+uh = uh.replace(ah, ah + """
+/* B2L (B1L-0234): thread-local linked AIR modules for the next rwa_render_create (stage 0=vertex, 1=fragment) */
+void rwa_b2l_set_linked(unsigned stage, const void *const *mods, const size_t *sizes, unsigned count);
+/* B2L (B1L-0268): drop/retake the caller's context lock around AIR->NIR translation */
+void rwa_set_context_lock(void (*drop)(void), void (*take)(void));""")
+open(qh, 'w').write(uh)
+
+qc = sys.argv[1] + '/air_metal.c'
+uc = open(qc).read()
+def repm(a, b, what):
+    global uc
+    if uc.count(a) != 1:
+        sys.exit('air-b2l: %s is not as expected (B1L-0234..0268)' % what)
+    uc = uc.replace(a, b)
+
+# 1. B1L-0266: frag_coord pixel center +0.5 on integer-corner backends (Bifrost arch >= 6)
+repm("""   NIR_PASS(_, nir, nir_lower_system_values);""", """   NIR_PASS(_, nir, nir_lower_system_values);
+   /* B2L (B1L-0266): Metal gives pixel centers (x + 0.5, y + 0.5); Bifrost load_frag_coord is pixel corner */
+   if (nir->info.stage == MESA_SHADER_FRAGMENT && screen->caps.fs_coord_pixel_center_integer) {
+      nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+      nir_builder fb = nir_builder_create(impl);
+      nir_def *half = nir_imm_vec4(&fb, 0.5f, 0.5f, 0.0f, 0.0f);
+      nir_foreach_block(blk, impl) {
+         nir_foreach_instr_safe(ins, blk) {
+            if (ins->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(ins);
+            if (intr->intrinsic != nir_intrinsic_load_frag_coord)
+               continue;
+            fb.cursor = nir_after_instr(ins);
+            nir_def *shifted = nir_fadd(&fb, &intr->def, half);
+            nir_def_rewrite_uses_after(&intr->def, shifted, shifted->parent_instr);
+         }
+      }
+   }""", 'B1L-0266 frag_coord')
+
+# 2. B1L-0263: Persistent coherent Metal buffers so Panfrost never swaps the BO behind -contents
+repm("""   buffer->res = pipe_buffer_create(device->screen,
+                                    PIPE_BIND_SHADER_BUFFER | PIPE_BIND_CONSTANT_BUFFER |
+                                    PIPE_BIND_INDEX_BUFFER,
+                                    PIPE_USAGE_STAGING, size);
+   if (!buffer->res) {
+      say(why, why_size, "the GPU driver would not allocate %zu bytes. After a few dozen "
+                         "allocations in one boot this driver starts refusing outright "
+                         "(docs/air.md section 4)", size);
+      free(buffer);
+      return NULL;
+   }
+
+   /* Mapped once, for the buffer's whole life, because the contract has no unmap: the
+    * driver holds one pointer and writes through it whenever it likes. That is cheap
+    * rather than clever here -- for a linear buffer freedreno's map is the kernel's own
+    * mapping of the GEM object, write combined, with no cache of this processor between
+    * the program and what the GPU reads (docs/metal.md 10.11), so there is nothing to
+    * flush and nothing to copy, and -[MTLBuffer didModifyRange:] has nothing to do.
+    *
+    * READ as well as WRITE: it is what tells the driver this mapping must be the real
+    * buffer and not a write-only staging copy it would upload later.
+    */
+   buffer->map = pipe_buffer_map(device->pipe, buffer->res,
+                                 PIPE_MAP_READ | PIPE_MAP_WRITE, &buffer->xfer);""", """   /* B2L (B1L-0263): persistent + coherent flags keep panfrost from shadowing/replacing the BO under -contents */
+   {
+      struct pipe_resource btmpl = { 0 };
+      btmpl.target = PIPE_BUFFER;
+      btmpl.format = PIPE_FORMAT_R8_UNORM;
+      btmpl.bind = PIPE_BIND_SHADER_BUFFER | PIPE_BIND_CONSTANT_BUFFER | PIPE_BIND_INDEX_BUFFER;
+      btmpl.usage = PIPE_USAGE_STAGING;
+      btmpl.flags = PIPE_RESOURCE_FLAG_MAP_PERSISTENT | PIPE_RESOURCE_FLAG_MAP_COHERENT;
+      btmpl.width0 = size;
+      btmpl.height0 = 1;
+      btmpl.depth0 = 1;
+      btmpl.array_size = 1;
+      buffer->res = device->screen->resource_create(device->screen, &btmpl);
+   }
+   if (!buffer->res) {
+      say(why, why_size, "the GPU driver would not allocate %zu bytes. After a few dozen "
+                         "allocations in one boot this driver starts refusing outright "
+                         "(docs/air.md section 4)", size);
+      free(buffer);
+      return NULL;
+   }
+
+   buffer->map = pipe_buffer_map(device->pipe, buffer->res,
+                                 PIPE_MAP_READ | PIPE_MAP_WRITE |
+                                 PIPE_MAP_PERSISTENT | PIPE_MAP_COHERENT, &buffer->xfer);""", 'B1L-0263 persistent buffer')
+
+# 3. B1L-0261: Metal primitive restart (0xFFFF / 0xFFFFFFFF) in index_range & pipe_draw_info
+repm("""static void
+index_range(const uint8_t *indices, unsigned count, unsigned index_size, unsigned *min_out,
+            unsigned *max_out)
+{
+   unsigned min = UINT32_MAX, max = 0;
+   for (unsigned i = 0; i < count; i++) {
+      unsigned v;
+      if (index_size == 2) {
+         uint16_t u;
+         memcpy(&u, indices + (size_t)i * 2, sizeof(u));
+         v = u;
+      } else {
+         uint32_t u;
+         memcpy(&u, indices + (size_t)i * 4, sizeof(u));
+         v = u;
+      }
+      if (v < min)
+         min = v;
+      if (v > max)
+         max = v;
+   }
+   *min_out = min;
+   *max_out = max;
+}""", """static void
+index_range(const uint8_t *indices, unsigned count, unsigned index_size, unsigned *min_out,
+            unsigned *max_out)
+{
+   unsigned min = UINT32_MAX, max = 0;
+   unsigned restart = index_size == 2 ? 0xffffu : 0xffffffffu;
+   bool any = false;
+   for (unsigned i = 0; i < count; i++) {
+      unsigned v;
+      if (index_size == 2) {
+         uint16_t u;
+         memcpy(&u, indices + (size_t)i * 2, sizeof(u));
+         v = u;
+      } else {
+         uint32_t u;
+         memcpy(&u, indices + (size_t)i * 4, sizeof(u));
+         v = u;
+      }
+      if (v == restart)   /* B2L (B1L-0261): Metal restart index */
+         continue;
+      any = true;
+      if (v < min)
+         min = v;
+      if (v > max)
+         max = v;
+   }
+   *min_out = any ? min : 0;
+   *max_out = any ? max : 0;
+}""", 'B1L-0261 index_range')
+
+repm("""      struct pipe_draw_info info = {
+         .mode = prim, .index_bounds_valid = true,
+         .index_size = (uint16_t)index_size,
+         .min_index = min_index, .max_index = max_index,
+         .instance_count = instances,
+         .start_instance = draw->base_instance,
+      };""", """      /* B2L (B1L-0261): Metal primitive restart is always enabled on indexed strips/lines (0xFFFF / 0xFFFFFFFF) */
+      struct pipe_draw_info info = {
+         .mode = prim, .index_bounds_valid = true,
+         .index_size = (uint16_t)index_size,
+         .primitive_restart = index_size != 0,
+         .restart_index = index_size == 2 ? 0xffffu : (index_size == 4 ? 0xffffffffu : 0),
+         .min_index = min_index, .max_index = max_index,
+         .instance_count = instances,
+         .start_instance = draw->base_instance,
+      };""", 'B1L-0261 primitive_restart')
+
+# 4. B1L-0234 + B1L-0268: rwa_b2l_set_linked & rwa_set_context_lock in rwa_render_create
+repm("""struct rwa_render *
+rwa_render_create(struct rwa_device *device,""", """#define B2L_MAX_LINKED 16
+static __thread const void *b2l_linked_mods[2][B2L_MAX_LINKED];
+static __thread size_t b2l_linked_sizes[2][B2L_MAX_LINKED];
+static __thread unsigned b2l_linked_count[2];
+static void (*b2l_ctx_lock_drop)(void);
+static void (*b2l_ctx_lock_take)(void);
+
+void
+rwa_b2l_set_linked(unsigned stage, const void *const *mods, const size_t *sizes, unsigned count)
+{
+   if (stage >= 2)
+      return;
+   if (!mods || !sizes || !count) {
+      b2l_linked_count[stage] = 0;
+      return;
+   }
+   unsigned n = MIN2(count, B2L_MAX_LINKED);
+   for (unsigned i = 0; i < n; i++) {
+      b2l_linked_mods[stage][i] = mods[i];
+      b2l_linked_sizes[stage][i] = sizes[i];
+   }
+   b2l_linked_count[stage] = n;
+}
+
+void
+rwa_set_context_lock(void (*drop)(void), void (*take)(void))
+{
+   b2l_ctx_lock_drop = drop;
+   b2l_ctx_lock_take = take;
+}
+
+struct rwa_render *
+rwa_render_create(struct rwa_device *device,""", 'B1L-0234/0268 linked and lock setters')
+
+repm("""   render->device = device;
+   render->mem_ctx = ralloc_context(NULL);
+   render->shape = *shape;
+
+   struct rwa_render_info out = { 0 };
+
+   /* The fragment shader first.""", """   render->device = device;
+   render->mem_ctx = ralloc_context(NULL);
+   render->shape = *shape;
+
+   struct rwa_render_info out = { 0 };
+
+   /* B2L (B1L-0234): snapshot thread-local linked modules before releasing lock */
+   const void *flink_m[B2L_MAX_LINKED], *vlink_m[B2L_MAX_LINKED];
+   size_t flink_s[B2L_MAX_LINKED], vlink_s[B2L_MAX_LINKED];
+   unsigned flink_n = b2l_linked_count[1], vlink_n = b2l_linked_count[0];
+   if (flink_n)
+      for (unsigned i = 0; i < flink_n; i++) { flink_m[i] = b2l_linked_mods[1][i]; flink_s[i] = b2l_linked_sizes[1][i]; }
+   if (vlink_n)
+      for (unsigned i = 0; i < vlink_n; i++) { vlink_m[i] = b2l_linked_mods[0][i]; vlink_s[i] = b2l_linked_sizes[0][i]; }
+   b2l_linked_count[0] = 0;
+   b2l_linked_count[1] = 0;
+
+   /* B2L (B1L-0268): AIR->NIR translation touches no pipe_context; drop caller lock until make_stage_cso */
+   bool b2l_lock_dropped = false;
+   if (b2l_ctx_lock_drop && b2l_ctx_lock_take) {
+      b2l_ctx_lock_drop();
+      b2l_lock_dropped = true;
+   }
+
+   /* The fragment shader first.""", 'rwa_render_create lock drop')
+
+repm("""   const struct air_to_nir_options fopts = { .constants = ffc, .num_constants = num_ffc };""",
+     """   const struct air_to_nir_options fopts = {
+      .constants = ffc, .num_constants = num_ffc,
+      .linked = flink_n ? flink_m : NULL, .linked_sizes = flink_n ? flink_s : NULL, .num_linked = flink_n,
+   };""", 'fopts linked')
+
+repm("""      const struct air_to_nir_options vopts = { .constants = vfc, .num_constants = num_vfc };""",
+     """      const struct air_to_nir_options vopts = {
+         .constants = vfc, .num_constants = num_vfc,
+         .linked = vlink_n ? vlink_m : NULL, .linked_sizes = vlink_n ? vlink_s : NULL, .num_linked = vlink_n,
+      };""", 'vopts linked')
+
+repm("""   b2l_ubo_read_ends(fs, &render->finfo);   /* B2L (B1L-0115) */
+   if (!render->generated_vertex)
+      b2l_ubo_read_ends(vs, &render->vinfo);
+   render->fs_cso = make_stage_cso(device, fs, why, why_size);""",
+     """   b2l_ubo_read_ends(fs, &render->finfo);   /* B2L (B1L-0115) */
+   if (!render->generated_vertex)
+      b2l_ubo_read_ends(vs, &render->vinfo);
+   if (b2l_lock_dropped && b2l_ctx_lock_take) {
+      b2l_ctx_lock_take();
+      b2l_lock_dropped = false;
+   }
+   render->fs_cso = make_stage_cso(device, fs, why, why_size);""", 'rwa_render_create lock retake')
+
+repm("""fail:
+   rwa_render_destroy(render);
+   return NULL;""",
+     """fail:
+   if (b2l_lock_dropped && b2l_ctx_lock_take) {
+      b2l_ctx_lock_take();
+      b2l_lock_dropped = false;
+   }
+   rwa_render_destroy(render);
+   return NULL;""", 'rwa_render_create fail lock retake')
+
+open(qc, 'w').write(uc)
+print('air-b2l: linked modules, primitive restart, persistent buffers, frag_coord +0.5, lock release applied')
+
+

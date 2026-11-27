@@ -68,7 +68,7 @@ int b2l_bb_dyld_pid = -1;      /* B1L-0031: backboardd given the EAGL bridge */
 #define B2L_BB_LIB  "/usr/local/lib/b2l-gl-v9/libb2l-gl.dylib"
 /* B1L-0044: Metal M1, the test library (userspace/metal/b2l_metal_test.m) when the GLES bridge is off */
 #define B2L_MTEST_HOST "/weatherd"   /* B1L-0054: an ordinary daemon, not a boot task */
-#define B2L_BB_MTEST "/usr/local/lib/b2l-metal-v95/libb2l-metal-test.dylib"
+#define B2L_BB_MTEST "/usr/local/lib/b2l-metal-v96/libb2l-metal-test.dylib"
 static int
 b2l_exec_bb_inject(struct image_params *imgp, int pointer_size)
 {
@@ -115,7 +115,7 @@ b2l_exec_bb_inject(struct image_params *imgp, int pointer_size)
  * CAMetalLayer drawn by the Mali with QuartzCore's shaders, on top of the app, presented through CoreAnimation to
  * backboardd's (CPU) compositor. Kill switch: boot-arg b2l_metal_app=0. */
 #define B2L_APP_HOST "/MobileTimer.app/MobileTimer"
-#define B2L_APP_LIB "/usr/local/lib/b2l-metal-v95/libb2l-metal-app.dylib"
+#define B2L_APP_LIB "/usr/local/lib/b2l-metal-v96/libb2l-metal-app.dylib"
 int b2l_app_dyld_pid = -1;
 static int
 b2l_exec_app_inject(struct image_params *imgp, int pointer_size)

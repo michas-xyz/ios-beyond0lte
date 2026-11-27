@@ -99,6 +99,71 @@
 #include <IOSurface/IOSurfaceRef.h>   /* B2L (B1L-0132) */
 #include <dlfcn.h>
 
+/* B2L (B1L-0259 + B1L-0268): recursive mutex serializing all Gallium pipe_context access across
+ * threads within a process, released cleanly around AIR->NIR shader translation. */
+static pthread_mutex_t b2l_mesa_mu;
+static __thread unsigned b2l_mesa_depth;
+
+static void
+b2l_mesa_mu_init(void)
+{
+	pthread_mutexattr_t attr;
+	pthread_mutexattr_init(&attr);
+	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+	pthread_mutex_init(&b2l_mesa_mu, &attr);
+	pthread_mutexattr_destroy(&attr);
+}
+
+static void
+b2l_mesa_lock(void)
+{
+	static pthread_once_t once = PTHREAD_ONCE_INIT;
+	pthread_once(&once, b2l_mesa_mu_init);
+	pthread_mutex_lock(&b2l_mesa_mu);
+	b2l_mesa_depth++;
+}
+
+static void
+b2l_mesa_unlock(void)
+{
+	if (b2l_mesa_depth > 0) {
+		b2l_mesa_depth--;
+	}
+	pthread_mutex_unlock(&b2l_mesa_mu);
+}
+
+static void
+b2l_mesa_unlock_cleanup(int *guard)
+{
+	(void)guard;
+	b2l_mesa_unlock();
+}
+
+#define B2L_MESA_SCOPE() \
+	b2l_mesa_lock(); \
+	int _b2l_mesa_guard __attribute__((cleanup(b2l_mesa_unlock_cleanup))) = 0; \
+	(void)_b2l_mesa_guard
+
+static void
+b2l_mesa_drop(void)
+{
+	if (b2l_mesa_depth == 1) {
+		b2l_mesa_depth = 0;
+		pthread_mutex_unlock(&b2l_mesa_mu);
+	}
+}
+
+static void
+b2l_mesa_take(void)
+{
+	if (b2l_mesa_depth == 0) {
+		pthread_mutex_lock(&b2l_mesa_mu);
+		b2l_mesa_depth = 1;
+	}
+}
+
+static unsigned b2l_metal_pixel_bytes(unsigned format);
+
 #include "hakios.drawable.h"
 #include <stdarg.h>
 #include <stdio.h>
@@ -571,6 +636,9 @@ static struct {
 	/* B2L (B1L-0123): views of some levels and slices; optional */
 	struct rwa_texture *(*texture_view_range)(struct rwa_texture *, unsigned, unsigned, unsigned, unsigned, unsigned,
 						  char *, size_t);
+	/* B2L (B1L-0234 + B1L-0268): linked AIR modules and lock release during translation */
+	void (*set_linked)(unsigned, const void *const *, const size_t *, unsigned);
+	void (*set_context_lock)(void (*)(void), void (*)(void));
 } mesa;
 
 /* B2L (B1L-0125): views of some levels or slices, and drawing into a pass attachment's level/slice (B1L-0123). With
@@ -647,6 +715,11 @@ mesa_available(void)
 	*(void **)&mesa.depth_stencil_create = dlsym(mesa.handle, "rwa_depth_stencil_create");
 	*(void **)&mesa.depth_stencil_destroy = dlsym(mesa.handle, "rwa_depth_stencil_destroy");
 	*(void **)&mesa.finish = dlsym(mesa.handle, "rwa_finish");
+	*(void **)&mesa.set_linked = dlsym(mesa.handle, "rwa_b2l_set_linked");
+	*(void **)&mesa.set_context_lock = dlsym(mesa.handle, "rwa_set_context_lock");
+	if (mesa.set_context_lock != NULL) {
+		mesa.set_context_lock(b2l_mesa_drop, b2l_mesa_take);
+	}
 	if (mesa.device_open == NULL || mesa.compute_create == NULL || mesa.dispatch == NULL ||
 	    mesa.texture_create == NULL || mesa.sampler_create == NULL) {
 		/* rwa_dispatch's arguments changed when textures were added to the contract, so
@@ -1001,6 +1074,8 @@ struct gem_close { uint32_t handle, pad; };
 
 @class HakiosMetalCommandQueue;
 @class HakiosMetalWork;
+@class HakiosMetalHeap;
+@class HakiosMetalBuffer;
 
 @interface HakiosMetalComputePipeline : _MTLComputePipelineState {
 	HakiosMetalDevice *_owner;
@@ -1159,6 +1234,13 @@ struct gem_close { uint32_t handle, pad; };
 	BOOL _liveCopy;            /* B2L (B1L-0136): a private copy of a surface whose rows are not 64-byte aligned */
 	HakiosMetalTexture *_liveSource;  /* the copy a view refreshes, or NULL on the copy itself */
 	unsigned _liveRefreshes;   /* how many times a live copy has been brought up to date */
+	/* B2L (B1L-0235/0236/0251): buffer-backed texture state */
+	HakiosMetalBuffer *_parentBuffer;
+	NSUInteger _bufferOffset, _bufferBytesPerRow;
+	BOOL _bufferWritable;
+	/* B2L (B1L-0256): optional parent heap accounting */
+	HakiosMetalHeap *_heap;
+	NSUInteger _heapAllocatedSize;
 }
 @property (readonly) struct rwa_texture *mesaTexture;
 /* Not part of MTLTexture: the depth or stencil aspect of this texture, one float and one
@@ -1172,6 +1254,12 @@ struct gem_close { uint32_t handle, pad; };
 - (void)hakiosSetLiveCopy;                    /* B2L (B1L-0136) */
 - (void)hakiosInheritLiveCopyFrom:(HakiosMetalTexture *)source;
 - (void)hakiosRefreshLiveCopy;
+- (void)hakiosSetParentBuffer:(HakiosMetalBuffer *)buf offset:(NSUInteger)offset
+		  bytesPerRow:(NSUInteger)bytesPerRow writable:(BOOL)writable;
+- (BOOL)hakiosSyncFromParentBufferIfReadOnly;
+- (void)hakiosWriteBackToParentBuffer;
+- (BOOL)hakiosHasParentBuffer;
+- (void)hakiosSetHeap:(HakiosMetalHeap *)heap allocatedSize:(NSUInteger)size;
 @end
 
 @interface HakiosMetalSampler : _MTLSamplerState {
@@ -1208,6 +1296,17 @@ struct gem_close { uint32_t handle, pad; };
 		index:(NSUInteger *)index;
 @end
 
+@interface HakiosMetalHeap : _MTLObjectWithLabel {
+	HakiosMetalDevice *_owner;
+	NSUInteger _size, _used;
+	NSUInteger _storageMode, _cpuCacheMode, _hazardTrackingMode;
+	NSUInteger _type;
+	pthread_mutex_t _heapLock;
+}
+- (instancetype)initWithDevice:(HakiosMetalDevice *)device descriptor:(id)descriptor;
+- (void)hakiosReleaseBytes:(NSUInteger)bytes;
+@end
+
 @interface HakiosMetalBuffer : _MTLResource {
 	HakiosMetalDevice *_owner;
 	io_connect_t _gpu;        /* not owned: the device holds it */
@@ -1217,11 +1316,22 @@ struct gem_close { uint32_t handle, pad; };
 	NSUInteger _length;
 	struct rwa_buffer *_mesa; /* set instead when the memory came from Mesa */
 	int _responsibleProcess;  /* what <MTLResourceSPI> calls the owner, for accounting */
+	void (^_deallocator)(void *, NSUInteger);   /* B2L (B1L-0253) */
+	void *_noCopyBytes;       /* B2L (B1L-0236/0253): caller backing pointer for NoCopy buffers */
+	NSUInteger _noCopyLength;
+	HakiosMetalHeap *_heap;   /* B2L (B1L-0256) */
+	NSUInteger _heapAllocatedSize;
 }
 @property (readonly) struct rwa_buffer *mesaBuffer;
 - (instancetype)initWithDevice:(HakiosMetalDevice *)device
 			   gpu:(io_connect_t)gpu
 			length:(NSUInteger)length;
+- (void)hakiosSetDeallocator:(void (^)(void *, NSUInteger))deallocator
+		       bytes:(void *)bytes
+		      length:(NSUInteger)length;
+- (void)hakiosSyncFromCaller;
+- (void)hakiosSyncToCaller;
+- (void)hakiosSetHeap:(HakiosMetalHeap *)heap allocatedSize:(NSUInteger)size;
 @end
 
 /*
@@ -1310,6 +1420,7 @@ b2l_live_fill(IOSurfaceRef io, size_t plane, unsigned width, unsigned height,
 	if (mesa_available()) {
 		char why[256] = { 0 };
 
+		B2L_MESA_SCOPE();
 		_mesa = mesa.device_open(why, sizeof(why));
 		rw_print("the compiler library %s\n",
 		         _mesa != NULL ? mesa.device_name(_mesa) : why);
@@ -1345,6 +1456,7 @@ b2l_live_fill(IOSurfaceRef io, size_t plane, unsigned width, unsigned height,
 - (void)dealloc
 {
 	if (_mesa != NULL) {
+		B2L_MESA_SCOPE();
 		mesa.device_close(_mesa);
 	}
 	if (_gpu != IO_OBJECT_NULL) {
@@ -1453,6 +1565,44 @@ b2l_describe_function(id fn, const char *stage)
 			if (!B2L_QUIET) rw_print("B2L fc:   %s.%s %s = %.300s\n", class_getName(k), nm, ty ?: "?", [d UTF8String]);
 		}
 		free(iv);
+	}
+}
+
+/* B2L (B1L-0234): push any MTLLinkedFunctions bitcode arrays for stage (0=vertex, 1=fragment) */
+static void
+b2l_push_linked(unsigned stage, id linkedObj)
+{
+	const void *mods[16];
+	size_t sizes[16];
+	unsigned n = 0;
+
+	if (linkedObj == nil || mesa.set_linked == NULL) {
+		return;
+	}
+	SEL bitcode = sel_getUid("bitcodeData");
+	SEL lists[2] = { @selector(functions), @selector(privateFunctions) };
+	for (unsigned li = 0; li < 2 && n < 16; li++) {
+		if (![linkedObj respondsToSelector:lists[li]]) {
+			continue;
+		}
+		NSArray *arr = ((id (*)(id, SEL))objc_msgSend)(linkedObj, lists[li]);
+		for (id fn in arr) {
+			if (n >= 16) {
+				break;
+			}
+			if (fn == nil || ![fn respondsToSelector:bitcode]) {
+				continue;
+			}
+			NSData *air = ((NSData *(*)(id, SEL))objc_msgSend)(fn, bitcode);
+			if (air != nil && [air length] >= 4) {
+				mods[n] = [air bytes];
+				sizes[n] = [air length];
+				n++;
+			}
+		}
+	}
+	if (n > 0) {
+		mesa.set_linked(stage, mods, sizes, n);
 	}
 }
 
@@ -1661,12 +1811,30 @@ b2l_describe_function(id fn, const char *stage)
 
 	char why[512] = { 0 };
 	struct rwa_render_info info = { 0 };
-	struct rwa_render *render = mesa.render_create(_mesa,
-	    vertex_air != nil ? [vertex_air bytes] : NULL,
-	    vertex_air != nil ? [vertex_air length] : 0,
-	    vertex != nil ? [[vertex name] UTF8String] : NULL,
-	    [fragment_air bytes], [fragment_air length], [[fragment name] UTF8String],
-	    &shape, &info, why, sizeof(why));
+	struct rwa_render *render = NULL;
+	{
+		B2L_MESA_SCOPE();
+		if (mesa.set_linked != NULL) {
+			mesa.set_linked(0, NULL, NULL, 0);
+			mesa.set_linked(1, NULL, NULL, 0);
+			if ([descriptor respondsToSelector:@selector(vertexLinkedFunctions)]) {
+				b2l_push_linked(0, [descriptor vertexLinkedFunctions]);
+			}
+			if ([descriptor respondsToSelector:@selector(fragmentLinkedFunctions)]) {
+				b2l_push_linked(1, [descriptor fragmentLinkedFunctions]);
+			}
+		}
+		render = mesa.render_create(_mesa,
+		    vertex_air != nil ? [vertex_air bytes] : NULL,
+		    vertex_air != nil ? [vertex_air length] : 0,
+		    vertex != nil ? [[vertex name] UTF8String] : NULL,
+		    [fragment_air bytes], [fragment_air length], [[fragment name] UTF8String],
+		    &shape, &info, why, sizeof(why));
+		if (mesa.set_linked != NULL) {
+			mesa.set_linked(0, NULL, NULL, 0);
+			mesa.set_linked(1, NULL, NULL, 0);
+		}
+	}
 
 	if (render == NULL) {
 		/* PRINTED as well as returned, and RW_AGAIN because the same specification
@@ -1924,7 +2092,11 @@ b2l_describe_function(id fn, const char *stage)
 		rw_print("B2L ICON: created 240x240 texture format %u type %u\n",
 			 shape.pixel_format, shape.type);
 	}
-	struct rwa_texture *texture = mesa.texture_create(_mesa, &shape, why, sizeof(why));
+	struct rwa_texture *texture = NULL;
+	{
+		B2L_MESA_SCOPE();
+		texture = mesa.texture_create(_mesa, &shape, why, sizeof(why));
+	}
 
 	if (texture == NULL) {
 		rw_print("%s\n", why);
@@ -1960,7 +2132,11 @@ b2l_describe_function(id fn, const char *stage)
 		.lod_min = [descriptor lodMinClamp],
 		.lod_max = [descriptor lodMaxClamp],
 	};
-	struct rwa_sampler *sampler = mesa.sampler_create(_mesa, &state, why, sizeof(why));
+	struct rwa_sampler *sampler = NULL;
+	{
+		B2L_MESA_SCOPE();
+		sampler = mesa.sampler_create(_mesa, &state, why, sizeof(why));
+	}
 
 	if (sampler == NULL) {
 		rw_print("%s\n", why);
@@ -2032,8 +2208,11 @@ b2l_describe_function(id fn, const char *stage)
 		};
 	}
 
-	struct rwa_depth_stencil *made = mesa.depth_stencil_create(_mesa, &state, why,
-								   sizeof(why));
+	struct rwa_depth_stencil *made = NULL;
+	{
+		B2L_MESA_SCOPE();
+		made = mesa.depth_stencil_create(_mesa, &state, why, sizeof(why));
+	}
 
 	if (made == NULL) {
 		rw_print("%s\n", why);
@@ -2185,13 +2364,16 @@ b2l_describe_function(id fn, const char *stage)
 	struct rwa_argbuf_layout sets[8];
 	unsigned count = 0;
 
-	if (mesa.module_argbufs(_mesa, [air bytes], [air length],
-				[[function name] UTF8String], sets,
-				(unsigned)(sizeof(sets) / sizeof(sets[0])), &count, why,
-				sizeof(why)) != 0) {
-		/* the frontend's own sentence, passed through: it names what it refused */
-		rw_print("%s\n", why);
-		return nil;
+	{
+		B2L_MESA_SCOPE();
+		if (mesa.module_argbufs(_mesa, [air bytes], [air length],
+					[[function name] UTF8String], sets,
+					(unsigned)(sizeof(sets) / sizeof(sets[0])), &count, why,
+					sizeof(why)) != 0) {
+			/* the frontend's own sentence, passed through: it names what it refused */
+			rw_print("%s\n", why);
+			return nil;
+		}
 	}
 	for (unsigned i = 0; i < count; i++) {
 		if (sets[i].metal_index != (unsigned)index) {
@@ -2340,9 +2522,13 @@ b2l_describe_function(id fn, const char *stage)
 
 	char why[512] = { 0 };
 	struct rwa_compute_info info = { 0 };
-	struct rwa_compute *compute = mesa.compute_create(_mesa, [air bytes], [air length],
-							  [[function name] UTF8String], &info,
-							  why, sizeof(why));
+	struct rwa_compute *compute = NULL;
+	{
+		B2L_MESA_SCOPE();
+		compute = mesa.compute_create(_mesa, [air bytes], [air length],
+					      [[function name] UTF8String], &info,
+					      why, sizeof(why));
+	}
 	if (compute == NULL) {
 		/* The front end's own sentence, passed through rather than replaced: it says
 		 * which construct it refused, and an application can act on that. */
@@ -2482,18 +2668,49 @@ b2l_describe_function(id fn, const char *stage)
 	return 16;   /* a placeholder: the real figure is per format and belongs to Mesa */
 }
 
-/* Heaps are suballocation of one big allocation, and nothing here suballocates yet. Metal's
- * contract allows nil and a zero size-and-align, so these decline rather than lie. */
-- (id)newHeapWithDescriptor:(id)descriptor { (void)descriptor; return nil; }
+/* B2L (B1L-0256): MTLHeap over normal device allocations with size accounting. */
+- (id)newHeapWithDescriptor:(id)descriptor
+{
+	if (descriptor == nil || _mesa == NULL) {
+		return nil;
+	}
+	if ([descriptor respondsToSelector:@selector(type)] && [descriptor type] != 0) {
+		RW_ONCE("B2L: MTLHeapType %lu (placement/sparse) is not implemented; nil\n",
+			(unsigned long)[descriptor type]);
+		return nil;
+	}
+	return [[HakiosMetalHeap alloc] initWithDevice:self descriptor:descriptor];
+}
 - (MTLSizeAndAlign)heapBufferSizeAndAlignWithLength:(NSUInteger)length options:(NSUInteger)options
 {
-	(void)length; (void)options;
-	return (MTLSizeAndAlign){ 0, 0 };
+	(void)options;
+	NSUInteger aligned = (length + 4095ul) & ~4095ul;
+	if (aligned == 0 && length > 0) {
+		aligned = 4096ul;
+	}
+	return (MTLSizeAndAlign){ aligned, 4096ul };
 }
 - (MTLSizeAndAlign)heapTextureSizeAndAlignWithDescriptor:(id)descriptor
 {
-	(void)descriptor;
-	return (MTLSizeAndAlign){ 0, 0 };
+	if (descriptor == nil) {
+		return (MTLSizeAndAlign){ 0, 0 };
+	}
+	unsigned bpp = b2l_metal_pixel_bytes((unsigned)[descriptor pixelFormat]);
+	if (bpp == 0) {
+		bpp = 8;
+	}
+	NSUInteger w = [descriptor width] ? [descriptor width] : 1;
+	NSUInteger h = [descriptor height] ? [descriptor height] : 1;
+	NSUInteger d = [descriptor depth] ? [descriptor depth] : 1;
+	NSUInteger slices = [descriptor arrayLength] ? [descriptor arrayLength] : 1;
+	NSUInteger samples = [descriptor sampleCount] ? [descriptor sampleCount] : 1;
+	NSUInteger levels = [descriptor mipmapLevelCount] ? [descriptor mipmapLevelCount] : 1;
+	NSUInteger bytes = w * h * d * slices * samples * bpp;
+	if (levels > 1) {
+		bytes = bytes + (bytes >> 1);
+	}
+	NSUInteger aligned = (bytes + 4095ul) & ~4095ul;
+	return (MTLSizeAndAlign){ MAX(aligned, 4096ul), 4096ul };
 }
 
 /* Everything else the two protocols require and this driver has not built. Each returns the
@@ -2561,8 +2778,11 @@ b2l_describe_function(id fn, const char *stage)
 		}
 		shape.usage |= MTLTextureUsageRenderTarget;
 	}
-	texture = rwd_texture_for_surface(_mesa, s, p, (const struct rwd_texture_shape *)&shape,
-					  &took, why, sizeof(why));
+	{
+		B2L_MESA_SCOPE();
+		texture = rwd_texture_for_surface(_mesa, s, p, (const struct rwd_texture_shape *)&shape,
+						  &took, why, sizeof(why));
+	}
 	{   /* B2L (B1L-0133): each distinct IOSurface shape the compositor turns into a texture, once (256 at most) */
 		static struct { unsigned w, h, f; size_t bpr; } seen[256];
 		static unsigned nseen;
@@ -2633,16 +2853,17 @@ b2l_describe_function(id fn, const char *stage)
 		       options:(NSUInteger)options
 		   deallocator:(void (^)(void *, NSUInteger))deallocator
 {
-	/* B2L (B1L-0186): RenderBox (SwiftUI's renderer, in SpringBoard) wraps its 16 KiB of constant tables this way
-	 * and dereferences the answer without looking: nil crashed SpringBoard at every launch.
-	 * shortcut: a copy, taken once -- later writes by the caller are not seen and the deallocator is never run (its
-	 * pages leak); wrap the caller's pages when the kernel can map them into the GPU. */
-	(void)deallocator;
-	/* the window server had nil here until 0186 and QuartzCore copes with it: kept, a copy could go stale there */
-	if (strcmp(getprogname(), "backboardd") == 0)
+	/* B2L (B1L-0186 + B1L-0236 + B1L-0253): backboardd keeps nil (QuartzCore falls back);
+	 * RenderBox/IconRendering use NoCopy buffers and require the deallocator block to be retained
+	 * and invoked at dealloc, plus two-way byte sync with caller memory. */
+	if (strcmp(getprogname(), "backboardd") == 0) {
 		return nil;
-	RW_AGAIN("B2L: newBufferWithBytesNoCopy of %lu bytes answered with a copy\n", (unsigned long)length);
-	return [self newBufferWithBytes:bytes length:length options:options];
+	}
+	HakiosMetalBuffer *buf = [self newBufferWithBytes:bytes length:length options:options];
+	if (buf != nil) {
+		[buf hakiosSetDeallocator:deallocator bytes:bytes length:length];
+	}
+	return buf;
 }
 - (id)newIndirectCommandBufferWithDescriptor:(id)d
 			      maxCommandCount:(NSUInteger)count
@@ -2866,6 +3087,130 @@ b2l_describe_function(id fn, const char *stage)
 
 @end
 
+@implementation HakiosMetalHeap
+
++ (void)load
+{
+	Protocol *p = objc_getProtocol("MTLHeap");
+	if (p != NULL && !class_conformsToProtocol(self, p) && !class_addProtocol(self, p)) {
+		rw_print("class_addProtocol(MTLHeap) refused\n");
+	}
+}
+
+- (instancetype)initWithDevice:(HakiosMetalDevice *)device descriptor:(id)descriptor
+{
+	self = [super init];
+	if (self == nil) {
+		return nil;
+	}
+	pthread_mutex_init(&_heapLock, NULL);
+	_owner = device;
+	_size = [descriptor size];
+	if ([descriptor respondsToSelector:@selector(storageMode)]) {
+		_storageMode = [descriptor storageMode];
+	}
+	if ([descriptor respondsToSelector:@selector(cpuCacheMode)]) {
+		_cpuCacheMode = [descriptor cpuCacheMode];
+	}
+	if ([descriptor respondsToSelector:@selector(hazardTrackingMode)]) {
+		_hazardTrackingMode = [descriptor hazardTrackingMode];
+	}
+	if ([descriptor respondsToSelector:@selector(type)]) {
+		_type = [descriptor type];
+	}
+	return self;
+}
+
+- (void)dealloc
+{
+	pthread_mutex_destroy(&_heapLock);
+	[super dealloc];
+}
+
+- (BOOL)hakiosTryReserve:(NSUInteger)bytes
+{
+	BOOL ok = NO;
+	pthread_mutex_lock(&_heapLock);
+	if (_used <= _size && bytes <= _size - _used) {
+		_used += bytes;
+		ok = YES;
+	}
+	pthread_mutex_unlock(&_heapLock);
+	return ok;
+}
+
+- (void)hakiosReleaseBytes:(NSUInteger)bytes
+{
+	pthread_mutex_lock(&_heapLock);
+	_used = _used > bytes ? _used - bytes : 0;
+	pthread_mutex_unlock(&_heapLock);
+}
+
+- (id)device                          { return _owner; }
+- (NSUInteger)size                    { return _size; }
+- (NSUInteger)type                    { return _type; }
+- (NSUInteger)storageMode             { return _storageMode; }
+- (NSUInteger)cpuCacheMode            { return _cpuCacheMode; }
+- (NSUInteger)hazardTrackingMode      { return _hazardTrackingMode; }
+- (NSUInteger)resourceOptions         { return (_storageMode << 4) | _cpuCacheMode | (_hazardTrackingMode << 8); }
+- (NSUInteger)usedSize
+{
+	pthread_mutex_lock(&_heapLock);
+	NSUInteger u = _used;
+	pthread_mutex_unlock(&_heapLock);
+	return u;
+}
+- (NSUInteger)currentAllocatedSize    { return [self usedSize]; }
+- (NSUInteger)maxAvailableSizeWithAlignment:(NSUInteger)alignment
+{
+	(void)alignment;
+	pthread_mutex_lock(&_heapLock);
+	NSUInteger rem = _size > _used ? _size - _used : 0;
+	pthread_mutex_unlock(&_heapLock);
+	return rem;
+}
+- (NSUInteger)setPurgeableState:(NSUInteger)state { (void)state; return 2; }
+- (id)newBufferWithLength:(NSUInteger)length options:(NSUInteger)options
+{
+	NSUInteger want = [_owner heapBufferSizeAndAlignWithLength:length options:options].size;
+	if (want == 0 || ![self hakiosTryReserve:want]) {
+		return nil;
+	}
+	HakiosMetalBuffer *buf = [_owner newBufferWithLength:length options:options];
+	if (buf == nil) {
+		[self hakiosReleaseBytes:want];
+		return nil;
+	}
+	[buf hakiosSetHeap:self allocatedSize:want];
+	return buf;
+}
+- (id)newTextureWithDescriptor:(id)descriptor
+{
+	NSUInteger want = [_owner heapTextureSizeAndAlignWithDescriptor:descriptor].size;
+	if (want == 0 || ![self hakiosTryReserve:want]) {
+		return nil;
+	}
+	HakiosMetalTexture *tex = [_owner newTextureWithDescriptor:descriptor];
+	if (tex == nil) {
+		[self hakiosReleaseBytes:want];
+		return nil;
+	}
+	[tex hakiosSetHeap:self allocatedSize:want];
+	return tex;
+}
+- (id)newBufferWithLength:(NSUInteger)l options:(NSUInteger)o offset:(NSUInteger)off
+{
+	(void)l; (void)o; (void)off;
+	return nil;
+}
+- (id)newTextureWithDescriptor:(id)d offset:(NSUInteger)off
+{
+	(void)d; (void)off;
+	return nil;
+}
+
+@end
+
 @implementation HakiosMetalBuffer
 
 + (void)load
@@ -2896,6 +3241,7 @@ b2l_describe_function(id fn, const char *stage)
 	if (mesa_available() && [device mesaDevice] != NULL) {
 		char why[256] = { 0 };
 
+		B2L_MESA_SCOPE();
 		_mesa = mesa.buffer_create([device mesaDevice], length, why, sizeof(why));
 		if (_mesa == NULL) {
 			rw_print("Mesa would not allocate %lu bytes: %s\n",
@@ -2954,23 +3300,67 @@ b2l_describe_function(id fn, const char *stage)
 	return _mesa;
 }
 
+- (void)hakiosSetDeallocator:(void (^)(void *, NSUInteger))deallocator
+		       bytes:(void *)bytes
+		      length:(NSUInteger)length
+{
+	_noCopyBytes = bytes;
+	_noCopyLength = length;
+	if (deallocator != NULL) {
+		_deallocator = [deallocator copy];
+	}
+}
+
+- (void)hakiosSyncFromCaller
+{
+	if (_noCopyBytes != NULL && _contents != NULL && _noCopyLength > 0) {
+		NSUInteger n = _length < _noCopyLength ? _length : _noCopyLength;
+		memcpy(_contents, _noCopyBytes, n);
+	}
+}
+
+- (void)hakiosSyncToCaller
+{
+	if (_noCopyBytes != NULL && _contents != NULL && _noCopyLength > 0) {
+		NSUInteger n = _length < _noCopyLength ? _length : _noCopyLength;
+		memcpy(_noCopyBytes, _contents, n);
+	}
+}
+
+- (void)hakiosSetHeap:(HakiosMetalHeap *)heap allocatedSize:(NSUInteger)size
+{
+	_heap = [heap retain];
+	_heapAllocatedSize = size;
+}
+
 - (void)dealloc
 {
 	if (_mesa != NULL) {
+		B2L_MESA_SCOPE();
 		mesa.buffer_destroy(_mesa);
-		[super dealloc];
-		return;
-	}
-	if (_contents != NULL) {
-		IOConnectUnmapMemory64(_gpu, _handle, mach_task_self(),
-				       (mach_vm_address_t)(uintptr_t)_contents);
-	}
-	if (_handle != 0) {
-		struct gem_close request = { .handle = _handle, .pad = 0 };
-		size_t size = sizeof(request);
+		_mesa = NULL;
+	} else {
+		if (_contents != NULL) {
+			IOConnectUnmapMemory64(_gpu, _handle, mach_task_self(),
+					       (mach_vm_address_t)(uintptr_t)_contents);
+		}
+		if (_handle != 0) {
+			struct gem_close request = { .handle = _handle, .pad = 0 };
+			size_t size = sizeof(request);
 
-		IOConnectCallStructMethod(_gpu, kDrmGemClose, &request, sizeof(request), &request,
-					  &size);
+			IOConnectCallStructMethod(_gpu, kDrmGemClose, &request, sizeof(request), &request,
+						  &size);
+		}
+	}
+	if (_deallocator != NULL) {
+		_deallocator(_noCopyBytes, _noCopyLength);
+		[_deallocator release];
+		_deallocator = NULL;
+	}
+	if (_heap != nil) {
+		[_heap hakiosReleaseBytes:_heapAllocatedSize];
+		[_heap release];
+		_heap = nil;
 	}
 	[super dealloc];
 }
@@ -2999,7 +3389,7 @@ b2l_describe_function(id fn, const char *stage)
  * a path that then believes the resource was purged: see -addPurgedResource: on the command
  * buffer.) */
 - (NSUInteger)setPurgeableState:(NSUInteger)state { (void)state; return 2; }
-- (id)heap                      { return nil; }
+- (id)heap                      { return _heap; }
 - (NSUInteger)heapOffset        { return 0; }
 - (BOOL)isAliasable             { return NO; }
 - (void)makeAliasable           { }
@@ -3047,19 +3437,51 @@ b2l_describe_function(id fn, const char *stage)
 	return _responsibleProcess != 0 ? _responsibleProcess : getpid();
 }
 - (void)setResponsibleProcess:(int)pid { _responsibleProcess = pid; }
-/*
- * A texture laid over this buffer's memory. Textures exist now -- the comment here used to say
- * they did not -- but the contract still has no call that lays one over a buffer we already own,
- * so this is nil with a reason rather than nil with a stale excuse.
- */
+/* B2L (B1L-0231..0251): buffer-backed texture synced on input and written back on GPU completion. */
 - (id)newTextureWithDescriptor:(id)descriptor offset:(NSUInteger)offset
 		   bytesPerRow:(NSUInteger)bytesPerRow
 {
-	(void)descriptor; (void)offset; (void)bytesPerRow;
-	RW_ONCE("hakiosmetal: a texture over a buffer was asked for; the contract lays a texture "
-		"over an IOSurface and over memory of its own, but not over a buffer this driver "
-		"already holds\n");
-	return nil;
+	if (descriptor == nil || _owner == nil || _contents == NULL || _mesa == NULL) {
+		return nil;
+	}
+	MTLTextureDescriptor *desc = (MTLTextureDescriptor *)descriptor;
+	NSUInteger w = [desc width];
+	NSUInteger h = [desc height];
+	unsigned bpp = b2l_metal_pixel_bytes((unsigned)[desc pixelFormat]);
+	if (w == 0 || h == 0 || bpp == 0 || offset >= _length) {
+		return nil;
+	}
+	size_t minRow = (size_t)w * bpp;
+	size_t stride = bytesPerRow ? (size_t)bytesPerRow : minRow;
+	if (stride < minRow || offset + (size_t)(h - 1) * stride + minRow > _length) {
+		RW_AGAIN("B2L: buffer-texture out of bounds (%lux%lu offset=%lu bpr=%zu len=%lu)\n",
+			 (unsigned long)w, (unsigned long)h, (unsigned long)offset, stride, (unsigned long)_length);
+		return nil;
+	}
+	MTLTextureDescriptor *copyDesc = [[desc copy] autorelease];
+	if (copyDesc == nil) {
+		return nil;
+	}
+	if ([copyDesc usage] == MTLTextureUsageUnknown) {
+		[copyDesc setUsage:MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget];
+	}
+	HakiosMetalTexture *tex = [_owner newTextureWithDescriptor:copyDesc];
+	if (tex == nil) {
+		return nil;
+	}
+	[self hakiosSyncFromCaller];
+	unsigned origin[3] = { 0, 0, 0 };
+	unsigned extent[3] = { (unsigned)w, (unsigned)h, 1 };
+	char why[256] = { 0 };
+	{
+		B2L_MESA_SCOPE();
+		mesa.texture_write([tex mesaTexture], 0, 0, origin, extent,
+				   (const uint8_t *)_contents + offset, stride, why, sizeof(why));
+	}
+	BOOL writable = ([desc usage] == MTLTextureUsageUnknown) ||
+	    (([desc usage] & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite)) != 0);
+	[tex hakiosSetParentBuffer:self offset:offset bytesPerRow:stride writable:writable];
+	return tex;
 }
 
 - (id)newLinearTextureWithDescriptor:(id)descriptor offset:(NSUInteger)offset
@@ -3143,6 +3565,7 @@ static void b2l_note_pass(HakiosMetalWork *work);
 {
 	self = [super init];
 	if (self == nil) {
+		B2L_MESA_SCOPE();
 		mesa.texture_destroy(texture);
 		return nil;
 	}
@@ -3155,10 +3578,20 @@ static void b2l_note_pass(HakiosMetalWork *work);
 - (void)dealloc
 {
 	if (_texture != NULL) {
+		B2L_MESA_SCOPE();
 		mesa.texture_destroy(_texture);
+		_texture = NULL;
 	}
 	if (_iosurface != NULL) {
 		CFRelease(_iosurface);
+		_iosurface = NULL;
+	}
+	[_parentBuffer release];
+	_parentBuffer = nil;
+	if (_heap != nil) {
+		[_heap hakiosReleaseBytes:_heapAllocatedSize];
+		[_heap release];
+		_heap = nil;
 	}
 	[super dealloc];
 }
@@ -3198,6 +3631,77 @@ static void b2l_note_pass(HakiosMetalWork *work);
  * producer out for the length of the copy; the copy is one row per line, at the surface's
  * own pitch, because that is the geometry the texture was made for.
  */
+- (void)hakiosSetParentBuffer:(HakiosMetalBuffer *)buf offset:(NSUInteger)offset
+		  bytesPerRow:(NSUInteger)bytesPerRow writable:(BOOL)writable
+{
+	[_parentBuffer release];
+	_parentBuffer = [buf retain];
+	_bufferOffset = offset;
+	_bufferBytesPerRow = bytesPerRow;
+	_bufferWritable = writable;
+}
+
+- (BOOL)hakiosHasParentBuffer
+{
+	return _parentBuffer != nil;
+}
+
+- (BOOL)hakiosSyncFromParentBufferIfReadOnly
+{
+	if (_parentBuffer == nil || _bufferWritable || _texture == NULL) {
+		return YES;
+	}
+	[_parentBuffer hakiosSyncFromCaller];
+	const void *src = [_parentBuffer contents];
+	if (src == NULL || _shape.width == 0 || _shape.height == 0) {
+		return YES;
+	}
+	unsigned origin[3] = { 0, 0, 0 };
+	unsigned extent[3] = { (unsigned)_shape.width, (unsigned)_shape.height, 1 };
+	char why[256] = { 0 };
+	int rc;
+	{
+		B2L_MESA_SCOPE();
+		rc = mesa.texture_write(_texture, 0, 0, origin, extent,
+					(const uint8_t *)src + _bufferOffset,
+					_bufferBytesPerRow, why, sizeof(why));
+	}
+	return rc == 0;
+}
+
+- (void)hakiosWriteBackToParentBuffer
+{
+	if (_parentBuffer == nil || !_bufferWritable || _texture == NULL) {
+		return;
+	}
+	void *dst = [_parentBuffer contents];
+	if (dst == NULL || _shape.width == 0 || _shape.height == 0) {
+		return;
+	}
+	unsigned origin[3] = { 0, 0, 0 };
+	unsigned extent[3] = { (unsigned)_shape.width, (unsigned)_shape.height, 1 };
+	char why[256] = { 0 };
+	int rc;
+	{
+		B2L_MESA_SCOPE();
+		rc = mesa.texture_read(_texture, 0, 0, origin, extent,
+				       (uint8_t *)dst + _bufferOffset,
+				       _bufferBytesPerRow, why, sizeof(why));
+	}
+	if (rc == 0) {
+		[_parentBuffer hakiosSyncToCaller];
+	} else {
+		RW_AGAIN("B2L WRITEBACK: reading back %ux%u format %u failed: %s\n",
+			 _shape.width, _shape.height, _shape.pixel_format, why);
+	}
+}
+
+- (void)hakiosSetHeap:(HakiosMetalHeap *)heap allocatedSize:(NSUInteger)size
+{
+	_heap = [heap retain];
+	_heapAllocatedSize = size;
+}
+
 - (void)hakiosRefreshLiveCopy
 {
 	IOSurfaceRef io = (IOSurfaceRef)_iosurface;
@@ -3224,10 +3728,15 @@ static void b2l_note_pass(HakiosMetalWork *work);
 	if (IOSurfaceLock(io, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) {
 		return;
 	}
-	if (mesa.texture_write(_texture, 0, 0, origin, extent,
-			       IOSurfaceGetBaseAddressOfPlane(io, _iosurfacePlane),
-			       IOSurfaceGetBytesPerRowOfPlane(io, _iosurfacePlane),
-			       why, sizeof(why)) != 0) {
+	int wrc;
+	{
+		B2L_MESA_SCOPE();
+		wrc = mesa.texture_write(_texture, 0, 0, origin, extent,
+					 IOSurfaceGetBaseAddressOfPlane(io, _iosurfacePlane),
+					 IOSurfaceGetBytesPerRowOfPlane(io, _iosurfacePlane),
+					 why, sizeof(why));
+	}
+	if (wrc != 0) {
 		RW_AGAIN("B2L LIVE: refreshing a copy of surface %u failed: %s\n", IOSurfaceGetID(io), why);
 	} else if (_liveRefreshes < 3 || _liveRefreshes == 63 || _liveRefreshes == 1023) {
 		unsigned luma = 0, alpha = 0;
@@ -3257,9 +3766,9 @@ static void b2l_note_pass(HakiosMetalWork *work);
 - (id)parentTexture                { return objc_getAssociatedObject(self, &b2l_parent_key); }   /* B2L (B1L-0105) */
 - (NSUInteger)parentRelativeLevel  { return 0; }
 - (NSUInteger)parentRelativeSlice  { return 0; }
-- (id)buffer                       { return nil; }
-- (NSUInteger)bufferOffset         { return 0; }
-- (NSUInteger)bufferBytesPerRow    { return 0; }
+- (id)buffer                       { return _parentBuffer; }
+- (NSUInteger)bufferOffset         { return _parentBuffer != nil ? _bufferOffset : 0; }
+- (NSUInteger)bufferBytesPerRow    { return _parentBuffer != nil ? _bufferBytesPerRow : 0; }
 - (id)iosurface                    { return (id)_iosurface; }
 - (NSUInteger)iosurfacePlane       { return _iosurfacePlane; }
 /* MTLStorageModeShared, except for a multisample texture, which Metal does not allow to be
@@ -3282,7 +3791,7 @@ static void b2l_note_pass(HakiosMetalWork *work);
  * the compiler library's is held until it is destroyed, so there is no volatile state to
  * report and zero was not a state at all. */
 - (NSUInteger)setPurgeableState:(NSUInteger)state { (void)state; return 2; }
-- (id)heap                         { return nil; }
+- (id)heap                         { return _heap; }
 - (NSUInteger)heapOffset           { return 0; }
 - (BOOL)isAliasable                { return NO; }
 - (void)makeAliasable              { }
@@ -3359,9 +3868,12 @@ static void b2l_note_pass(HakiosMetalWork *work);
 			rw_print("B2L PUT: %u regions written so far\n", written);
 		}
 	}
-	if (mesa.texture_write(_texture, (unsigned)level, (unsigned)slice, origin, size, bytes,
-			       stride, why, sizeof(why)) != 0) {
-		rw_print("writing texels: %s\n", why);
+	{
+		B2L_MESA_SCOPE();
+		if (mesa.texture_write(_texture, (unsigned)level, (unsigned)slice, origin, size, bytes,
+				       stride, why, sizeof(why)) != 0) {
+			rw_print("writing texels: %s\n", why);
+		}
 	}
 }
 
@@ -3388,9 +3900,12 @@ static void b2l_note_pass(HakiosMetalWork *work);
 			     (unsigned)region.size.depth };
 
 	(void)image;
-	if (mesa.texture_read(_texture, (unsigned)level, (unsigned)slice, origin, size, bytes,
-			      stride, why, sizeof(why)) != 0) {
-		rw_print("reading texels: %s\n", why);
+	{
+		B2L_MESA_SCOPE();
+		if (mesa.texture_read(_texture, (unsigned)level, (unsigned)slice, origin, size, bytes,
+				      stride, why, sizeof(why)) != 0) {
+			rw_print("reading texels: %s\n", why);
+		}
 	}
 }
 
@@ -3418,8 +3933,12 @@ static void b2l_note_pass(HakiosMetalWork *work);
 		         "older than this driver and cannot say what a depth buffer holds\n");
 		return NO;
 	}
-	if (mesa.depth_read(_texture, 0, 0, origin, size, depth, stencil, why,
-			    sizeof(why)) != 0) {
+	int drc;
+	{
+		B2L_MESA_SCOPE();
+		drc = mesa.depth_read(_texture, 0, 0, origin, size, depth, stencil, why, sizeof(why));
+	}
+	if (drc != 0) {
 		rw_print("reading the depth of a texture: %s\n", why);
 		return NO;
 	}
@@ -3476,9 +3995,13 @@ static void b2l_note_pass(HakiosMetalWork *work);
 			return nil;
 		}
 		char why[512] = { 0 };
-		struct rwa_texture *view = mesa.texture_view_range(_texture, (unsigned)format, (unsigned)levels.location,
-								   (unsigned)levels.length, (unsigned)slices.location,
-								   (unsigned)slices.length, why, sizeof(why));
+		struct rwa_texture *view = NULL;
+		{
+			B2L_MESA_SCOPE();
+			view = mesa.texture_view_range(_texture, (unsigned)format, (unsigned)levels.location,
+						       (unsigned)levels.length, (unsigned)slices.location,
+						       (unsigned)slices.length, why, sizeof(why));
+		}
 		if (view == NULL) {
 			RW_AGAIN("texture view refused: %s\n", why);
 			return nil;
@@ -3520,7 +4043,11 @@ static void b2l_note_pass(HakiosMetalWork *work);
 		return nil;
 	}
 	char why[512] = { 0 };
-	struct rwa_texture *view = mesa.texture_view(_texture, (unsigned)format, why, sizeof(why));
+	struct rwa_texture *view = NULL;
+	{
+		B2L_MESA_SCOPE();
+		view = mesa.texture_view(_texture, (unsigned)format, why, sizeof(why));
+	}
 	if (view == NULL) {
 		rw_print("texture view refused: %s\n", why);
 		return nil;
@@ -3647,6 +4174,7 @@ static void b2l_note_pass(HakiosMetalWork *work);
 	 * nil to one of these */
 	self = [super initWithDevice:device samplerDescriptor:descriptor];
 	if (self == nil) {
+		B2L_MESA_SCOPE();
 		mesa.sampler_destroy(sampler);
 		return nil;
 	}
@@ -3657,6 +4185,7 @@ static void b2l_note_pass(HakiosMetalWork *work);
 - (void)dealloc
 {
 	if (_sampler != NULL) {
+		B2L_MESA_SCOPE();
 		mesa.sampler_destroy(_sampler);
 	}
 	[super dealloc];
@@ -3678,6 +4207,7 @@ static void b2l_note_pass(HakiosMetalWork *work);
 	 * there is reported by Apple's own validation. */
 	self = [super initWithDevice:device depthStencilDescriptor:descriptor];
 	if (self == nil) {
+		B2L_MESA_SCOPE();
 		mesa.depth_stencil_destroy(state);
 		return nil;
 	}
@@ -3722,6 +4252,7 @@ static void b2l_note_pass(HakiosMetalWork *work);
 - (void)dealloc
 {
 	if (_state != NULL) {
+		B2L_MESA_SCOPE();
 		mesa.depth_stencil_destroy(_state);
 	}
 	[super dealloc];
@@ -3749,6 +4280,7 @@ static void b2l_note_pass(HakiosMetalWork *work);
 	 * by it. */
 	self = [super initWithDevice:device pipelineStateDescriptor:descriptor];
 	if (self == nil) {
+		B2L_MESA_SCOPE();
 		mesa.compute_destroy(compute);
 		return nil;
 	}
@@ -3767,6 +4299,7 @@ static void b2l_note_pass(HakiosMetalWork *work);
 - (void)dealloc
 {
 	if (_compute != NULL) {
+		B2L_MESA_SCOPE();
 		mesa.compute_destroy(_compute);
 	}
 	[super dealloc];
@@ -3798,6 +4331,7 @@ static void b2l_note_pass(HakiosMetalWork *work);
 	 * descriptor, for the reason the compute one learned at its own line 1504 */
 	self = [super initWithDevice:device pipelineStateDescriptor:descriptor];
 	if (self == nil) {
+		B2L_MESA_SCOPE();
 		mesa.render_destroy(render);
 		return nil;
 	}
@@ -3832,6 +4366,7 @@ static void b2l_note_pass(HakiosMetalWork *work);
 - (void)dealloc
 {
 	if (_render != NULL) {
+		B2L_MESA_SCOPE();
 		mesa.render_destroy(_render);
 	}
 	[super dealloc];
@@ -4332,6 +4867,7 @@ b2l_note_pass(HakiosMetalWork *work)
 	NSUInteger _protectionOptions;  /* what the window server asked for; see -setProtectionOptions: */
 	void *_b2lFence;                /* B2L (B1L-0105): the fence of what -commit submitted, until waited for */
 	BOOL _b2lHeld;                  /* B2L (B1L-0106): this driver holds a reference until the handlers are delivered */
+	NSMutableArray *_writebackTextures;   /* B2L (B1L-0236): buffer-backed targets to read back after fence */
 }
 
 /*
@@ -4450,6 +4986,7 @@ b2l_note_pass(HakiosMetalWork *work)
 	}
 	[self hakiosReturnSlot];
 	[_work release];
+	[_writebackTextures release];
 	[_error release];
 	[_scheduled release];
 	[_completed release];
@@ -4559,110 +5096,129 @@ b2l_note_pass(HakiosMetalWork *work)
 
 - (void)enqueue { }
 
+- (void)hakiosRecordWriteback:(id)tex
+{
+	if (tex != nil && [tex isKindOfClass:[HakiosMetalTexture class]] &&
+	    [(HakiosMetalTexture *)tex hakiosHasParentBuffer]) {
+		if (_writebackTextures == nil) {
+			_writebackTextures = [[NSMutableArray alloc] init];
+		}
+		if (![_writebackTextures containsObject:tex]) {
+			[_writebackTextures addObject:tex];
+		}
+	}
+}
+
 /* Metal's own rule, kept: the recorded dispatches run here and not when they were encoded. */
 - (void)commit
 {
 	char why[512] = { 0 };
 
 	_status = RW_CB_COMMITTED;
-	for (HakiosMetalWork *work in _work) {
-		if (work->blitOp) {   /* B2L (B1L-0122): a failed copy is said and the rest still runs */
-			[self runBlit:work];
-			continue;
-		}
-		if (work->clearOnly) {
-			if (![self runClear:work why:why size:sizeof(why)]) {
-				goto done;
+	{
+		B2L_MESA_SCOPE();
+		for (HakiosMetalWork *work in _work) {
+			/* B2L (P4): sync read-only buffer-backed textures and live IOSurface copies at execution time */
+			if (work->blitOp) {
+				if (work->blitOp == 1) {
+					if ([work->blitSrc isKindOfClass:[HakiosMetalTexture class]]) {
+						[(HakiosMetalTexture *)work->blitSrc hakiosRefreshLiveCopy];
+						[(HakiosMetalTexture *)work->blitSrc hakiosSyncFromParentBufferIfReadOnly];
+					}
+					[self hakiosRecordWriteback:work->blitDst];
+				} else if (work->blitOp == 2) {
+					[self hakiosRecordWriteback:work->blitDst];
+				} else if (work->blitSrc != nil && [work->blitSrc isKindOfClass:[HakiosMetalBuffer class]]) {
+					[(HakiosMetalBuffer *)work->blitSrc hakiosSyncFromCaller];
+				}
+				[self runBlit:work];
+				continue;
 			}
-			continue;
-		}
-		if (work->render != nil) {
-			if (![self runDraw:work why:why size:sizeof(why)]) {
-				goto done;
+			for (unsigned i = 0; i < work->textureCount; i++) {
+				if ([work->textures[i] isKindOfClass:[HakiosMetalTexture class]]) {
+					[(HakiosMetalTexture *)work->textures[i] hakiosRefreshLiveCopy];
+					[(HakiosMetalTexture *)work->textures[i] hakiosSyncFromParentBufferIfReadOnly];
+				}
 			}
-			continue;
-		}
-		struct rwa_buffer *buffers[RW_MAX_BUFFERS] = { NULL };
-		struct rwa_texture *textures[RW_MAX_BUFFERS] = { NULL };
-		struct rwa_sampler *samplers[RW_MAX_BUFFERS] = { NULL };
-		/* Metal's one [[buffer(n)]] table, passed BOTH ways: `buffers` is what is
-		 * bound at each index, `table` is the same thing with Metal's own offset
-		 * beside it, and the library takes from each side what that side owns -- an
-		 * argument buffer's encoding offset and a buffer argument's own offset come
-		 * from the table, and which an index is nobody but the shader knows. */
-		struct rwa_buffer_bind table[RW_MAX_BUFFERS] = { { NULL, 0 } };
+			for (unsigned i = 0; i < work->colorCount; i++) {
+				[self hakiosRecordWriteback:work->color[i]];
+			}
+			if (work->clearOnly) {
+				if (![self runClear:work why:why size:sizeof(why)]) {
+					goto commit_done;
+				}
+				continue;
+			}
+			if (work->render != nil) {
+				if (![self runDraw:work why:why size:sizeof(why)]) {
+					goto commit_done;
+				}
+				continue;
+			}
+			struct rwa_buffer *buffers[RW_MAX_BUFFERS] = { NULL };
+			struct rwa_texture *textures[RW_MAX_BUFFERS] = { NULL };
+			struct rwa_sampler *samplers[RW_MAX_BUFFERS] = { NULL };
+			struct rwa_buffer_bind table[RW_MAX_BUFFERS] = { { NULL, 0 } };
 
-		for (unsigned i = 0; i < work->count; i++) {
-			buffers[i] = [work->buffers[i] mesaBuffer];
-			table[i].buffer = buffers[i];
-			table[i].offset = work->bufferOffsets[i];
-			if (buffers[i] == NULL && work->buffers[i] != nil) {
-				rw_print("buffer %u of this dispatch did not come "
-				         "from the compiler library, so it cannot be bound\n", i);
+			for (unsigned i = 0; i < work->count; i++) {
+				buffers[i] = [work->buffers[i] mesaBuffer];
+				table[i].buffer = buffers[i];
+				table[i].offset = work->bufferOffsets[i];
+				if (buffers[i] == NULL && work->buffers[i] != nil) {
+					rw_print("buffer %u of this dispatch did not come "
+					         "from the compiler library, so it cannot be bound\n", i);
+				}
 			}
-		}
-		for (unsigned i = 0; i < work->textureCount; i++) {
-			textures[i] = [work->textures[i] mesaTexture];
-			if (textures[i] == NULL && work->textures[i] != nil) {   /* B2L (B1L-0093) */
-				id t = work->textures[i];
-				rw_print("texture %u of this dispatch is a %s with no texture of the compiler "
-				         "library under it (pixel format %lu, %lux%lu, iosurface %p)\n", i,
-				         object_getClassName(t),
-				         [t respondsToSelector:@selector(pixelFormat)] ? (unsigned long)[t pixelFormat] : 0ul,
-				         [t respondsToSelector:@selector(width)] ? (unsigned long)[t width] : 0ul,
-				         [t respondsToSelector:@selector(height)] ? (unsigned long)[t height] : 0ul,
-				         [t respondsToSelector:@selector(iosurface)] ? (void *)[t iosurface] : NULL);
+			for (unsigned i = 0; i < work->textureCount; i++) {
+				textures[i] = [work->textures[i] mesaTexture];
+				[self hakiosRecordWriteback:work->textures[i]];
+				if (textures[i] == NULL && work->textures[i] != nil) {   /* B2L (B1L-0093) */
+					id t = work->textures[i];
+					rw_print("texture %u of this dispatch is a %s with no texture of the compiler "
+					         "library under it (pixel format %lu, %lux%lu, iosurface %p)\n", i,
+					         object_getClassName(t),
+					         [t respondsToSelector:@selector(pixelFormat)] ? (unsigned long)[t pixelFormat] : 0ul,
+					         [t respondsToSelector:@selector(width)] ? (unsigned long)[t width] : 0ul,
+					         [t respondsToSelector:@selector(height)] ? (unsigned long)[t height] : 0ul,
+					         [t respondsToSelector:@selector(iosurface)] ? (void *)[t iosurface] : NULL);
+				}
 			}
-		}
-		for (unsigned i = 0; i < work->samplerCount; i++) {
-			samplers[i] = [work->samplers[i] mesaSampler];
-		}
-		struct rwa_bindings bindings = {
-			.buffers = buffers, .buffer_count = work->count,
-			.textures = textures, .texture_count = work->textureCount,
-			.samplers = samplers, .sampler_count = work->samplerCount,
-		};
+			for (unsigned i = 0; i < work->samplerCount; i++) {
+				samplers[i] = [work->samplers[i] mesaSampler];
+			}
+			struct rwa_bindings bindings = {
+				.buffers = buffers, .buffer_count = work->count,
+				.textures = textures, .texture_count = work->textureCount,
+				.samplers = samplers, .sampler_count = work->samplerCount,
+			};
 
-		/* rwa_dispatch_buffers when the library has it, which is the same call with
-		 * Metal's offsets passed as well; a library too old to have it is used
-		 * through rwa_dispatch, and then a kernel with a set is refused by name
-		 * there and every offset is read as zero -- which is what an older library
-		 * did with one in any case, out loud. */
-		if (mesa.set_threadgroup_memory != NULL)
-			mesa.set_threadgroup_memory([work->pipeline compute], work->threadgroupBytes);
-		int rc = mesa.dispatch_buffers != NULL
-			    ? mesa.dispatch_buffers([work->pipeline compute], &bindings,
-						    table, work->count, work->groups,
-						    work->size, why, sizeof(why))
-			    : mesa.dispatch([work->pipeline compute], &bindings, work->groups,
-					    work->size, why, sizeof(why));
-		if (rc != 0) {
-			rw_print("the dispatch failed: %s\n", why);
-			_error = [[NSError errorWithDomain:@"HakiosMetal" code:2
-						  userInfo:@{ NSLocalizedDescriptionKey:
-							      [NSString stringWithUTF8String:why] }]
-				     retain];
-			_status = RW_CB_ERROR;
-			goto done;
+			if (mesa.set_threadgroup_memory != NULL)
+				mesa.set_threadgroup_memory([work->pipeline compute], work->threadgroupBytes);
+			int rc = mesa.dispatch_buffers != NULL
+				    ? mesa.dispatch_buffers([work->pipeline compute], &bindings,
+							    table, work->count, work->groups,
+							    work->size, why, sizeof(why))
+				    : mesa.dispatch([work->pipeline compute], &bindings, work->groups,
+						    work->size, why, sizeof(why));
+			if (rc != 0) {
+				rw_print("the dispatch failed: %s\n", why);
+				_error = [[NSError errorWithDomain:@"HakiosMetal" code:2
+							  userInfo:@{ NSLocalizedDescriptionKey:
+								      [NSString stringWithUTF8String:why] }]
+					     retain];
+				_status = RW_CB_ERROR;
+				goto commit_done;
+			}
 		}
+		if (mesa.flush_fence != NULL && mesa.fence_wait != NULL && mesa.fence_release != NULL) {
+			_b2lFence = mesa.flush_fence([[_queue device] mesaDevice]);
+		} else if (mesa.flush != NULL) {
+			mesa.flush([[_queue device] mesaDevice]);
+		}
+		_status = RW_CB_SCHEDULED;
+	commit_done:;
 	}
-	/* B2L (B1L-0074): draws no longer wait one by one; what they recorded goes to the GPU now, and
-	 * -waitUntilCompleted (or a completed handler) waits for all of it at once */
-	if (mesa.flush_fence != NULL && mesa.fence_wait != NULL && mesa.fence_release != NULL) {
-		/* B2L (B1L-0105): this buffer's own fence, for -waitUntilCompleted and the completed handlers to wait
-		 * for off this thread */
-		_b2lFence = mesa.flush_fence([[_queue device] mesaDevice]);
-	} else if (mesa.flush != NULL) {
-		mesa.flush([[_queue device] mesaDevice]);
-	}
-	_status = RW_CB_SCHEDULED;   /* submitted; the fence below is what makes it completed */
-done:
-	/* The queue's slot goes back here and on every way out of this method, a failed draw
-	 * included: a buffer that errored is as finished as one that drew, and a slot kept
-	 * because of an error would turn one bad draw into a queue that blocks for ever. */
 	[self hakiosReturnSlot];
-	/* and only then the handlers, so that a handler which makes the next command buffer
-	 * is not waiting for a slot this one still holds */
 	[self hakiosDeliverHandlers];
 }
 
@@ -4876,6 +5432,7 @@ done:
 - (void)waitUntilCompleted
 {
 	char why[512] = { 0 };
+	NSArray *wb = nil;
 
 	if (_status == RW_CB_ERROR) {
 		return;
@@ -4897,19 +5454,27 @@ done:
 				_status = RW_CB_ERROR;
 				return;
 			}
-			_status = RW_CB_COMPLETED;
-			return;
+			wb = _writebackTextures != nil ? [_writebackTextures copy] : nil;
+			[_writebackTextures removeAllObjects];
+		} else {
+			B2L_MESA_SCOPE();
+			if (mesa.finish([[_queue device] mesaDevice], why, sizeof(why)) != 0) {
+				rw_print("THE GPU DID NOT FINISH: %s\n", why);
+				_error = [[NSError errorWithDomain:@"HakiosMetal" code:3
+							  userInfo:@{ NSLocalizedDescriptionKey:
+								      [NSString stringWithUTF8String:why] }] retain];
+				_status = RW_CB_ERROR;
+				return;
+			}
+			wb = _writebackTextures != nil ? [_writebackTextures copy] : nil;
+			[_writebackTextures removeAllObjects];
 		}
+		_status = RW_CB_COMPLETED;
 	}
-	if (mesa.finish([[_queue device] mesaDevice], why, sizeof(why)) != 0) {
-		rw_print("THE GPU DID NOT FINISH: %s\n", why);
-		_error = [[NSError errorWithDomain:@"HakiosMetal" code:3
-					  userInfo:@{ NSLocalizedDescriptionKey:
-						      [NSString stringWithUTF8String:why] }] retain];
-		_status = RW_CB_ERROR;
-		return;
+	for (HakiosMetalTexture *tex in wb) {
+		[tex hakiosWriteBackToParentBuffer];
 	}
-	_status = RW_CB_COMPLETED;   /* the fence has been paid, and only now */
+	[wb release];
 }
 
 - (void)waitUntilScheduled { }
@@ -5048,7 +5613,8 @@ done:
 	for (id handler in scheduled) {
 		[self hakiosDeliver:(void (^)(id))handler];
 	}
-	if ([completed count] > 0 && _status != RW_CB_ERROR && _b2lFence != NULL) {
+	if (([completed count] > 0 || [_writebackTextures count] > 0) &&
+	    _status != RW_CB_ERROR && _b2lFence != NULL) {
 		/* B2L (B1L-0105): the fence is waited for on a queue of this driver's, in commit order, and the handlers
 		 * delivered from there: -commit returns at once, and CoreAnimation encodes the next frame while the GPU
 		 * draws this one */
@@ -5068,7 +5634,7 @@ done:
 		});
 		return;
 	}
-	if ([completed count] > 0 && _status != RW_CB_ERROR) {
+	if (([completed count] > 0 || [_writebackTextures count] > 0) && _status != RW_CB_ERROR) {
 		/* A completed handler is a promise about the GPU, so it is made true before it
 		 * is kept: -waitUntilCompleted is this driver's fence and sets the status the
 		 * handler will read. */
@@ -5364,11 +5930,7 @@ done:
 	if (index >= RW_MAX_BUFFERS) {
 		return;
 	}
-	/* B2L (B1L-0136): a private copy of a live surface is stale the moment it is made; it is
-	 * brought up to date here, after the producer drew and before this buffer is submitted. */
-	if ([texture isKindOfClass:[HakiosMetalTexture class]]) {
-		[(HakiosMetalTexture *)texture hakiosRefreshLiveCopy];
-	}
+	/* B2L (B1L-0136 + P4): live copies and read-only buffer textures refresh at execution time in -commit. */
 	/* B2L (B1L-0139): note when a 240x240 texture is bound to a fragment sampler,
 	 * to find who (if anyone) samples an app-icon snapshot. */
 	if ([texture isKindOfClass:[HakiosMetalTexture class]]) {
@@ -7323,9 +7885,12 @@ controlPointIndexBufferOffset:(NSUInteger)controlPointOffset
 		         class_getName(object_getClass(buffer)));
 		return;
 	}
-	if (mesa.argbuf_encode_buffer([_destination mesaBuffer], _offset, (unsigned)index,
-				      [buffer mesaBuffer], offset, why, sizeof(why)) != 0) {
-		rw_print("%s\n", why);
+	{
+		B2L_MESA_SCOPE();
+		if (mesa.argbuf_encode_buffer([_destination mesaBuffer], _offset, (unsigned)index,
+					      [buffer mesaBuffer], offset, why, sizeof(why)) != 0) {
+			rw_print("%s\n", why);
+		}
 	}
 }
 
@@ -7352,9 +7917,12 @@ controlPointIndexBufferOffset:(NSUInteger)controlPointOffset
 		         class_getName(object_getClass(texture)));
 		return;
 	}
-	if (mesa.argbuf_encode_texture([_destination mesaBuffer], _offset, (unsigned)index,
-				       [texture mesaTexture], why, sizeof(why)) != 0) {
-		rw_print("%s\n", why);
+	{
+		B2L_MESA_SCOPE();
+		if (mesa.argbuf_encode_texture([_destination mesaBuffer], _offset, (unsigned)index,
+					       [texture mesaTexture], why, sizeof(why)) != 0) {
+			rw_print("%s\n", why);
+		}
 	}
 }
 
@@ -7378,9 +7946,12 @@ controlPointIndexBufferOffset:(NSUInteger)controlPointOffset
 		         class_getName(object_getClass(sampler)));
 		return;
 	}
-	if (mesa.argbuf_encode_sampler([_destination mesaBuffer], _offset, (unsigned)index,
-				       [sampler mesaSampler], why, sizeof(why)) != 0) {
-		rw_print("%s\n", why);
+	{
+		B2L_MESA_SCOPE();
+		if (mesa.argbuf_encode_sampler([_destination mesaBuffer], _offset, (unsigned)index,
+					       [sampler mesaSampler], why, sizeof(why)) != 0) {
+			rw_print("%s\n", why);
+		}
 	}
 }
 
@@ -7690,6 +8261,7 @@ b2l_answer_abstract_stubs(void)
 	[super doesNotRecognizeSelector:sel]; \
 } \
 @end
+B2L_SAY_UNANSWERED(HakiosMetalHeap)
 B2L_SAY_UNANSWERED(HakiosMetalDevice)
 B2L_SAY_UNANSWERED(HakiosMetalBuffer)
 B2L_SAY_UNANSWERED(HakiosMetalTexture)

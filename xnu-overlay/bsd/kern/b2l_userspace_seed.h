@@ -284,23 +284,27 @@ static void b2l_metal_publish(vfs_context_t ctx)
     int on = 1; PE_parse_boot_argn("b2l_metal", &on, sizeof(on));
     if (!on) { printf("B2L METAL: disabled\n"); return; }
 #if B2L_METAL_EMBEDDED
-    int e = b2l_apps_directory("/System/Library/Extensions/B2LMetalv95.bundle", ctx);
+    int e = b2l_apps_directory("/System/Library/Extensions/B2LMetalv96.bundle", ctx);
     if (!e) e = b2l_apps_directory("/usr/local", ctx);
     if (!e) e = b2l_apps_directory("/usr/local/lib", ctx);
-    if (!e) e = b2l_apps_directory("/usr/local/lib/b2l-metal-v95", ctx);
-    if (!e) e = b2l_metal_publish_zlib("/System/Library/Extensions/B2LMetalv95.bundle/B2LMetalv95",
-        "/System/Library/Extensions/B2LMetalv95.bundle/.B2LMetalv95",
+    if (!e) e = b2l_apps_directory("/usr/local/lib/b2l-metal-v96", ctx);
+    if (!e) e = b2l_metal_publish_zlib("/System/Library/Extensions/B2LMetalv96.bundle/B2LMetalv96",
+        "/System/Library/Extensions/B2LMetalv96.bundle/.B2LMetalv96",
         b2l_metal_bundle_bin_z, sizeof(b2l_metal_bundle_bin_z), b2l_metal_bundle_bin_raw_len, 0755, ctx);
-    if (!e) e = b2l_metal_publish_zlib("/System/Library/Extensions/B2LMetalv95.bundle/Info.plist",
-        "/System/Library/Extensions/B2LMetalv95.bundle/.Info.plist",
+    if (!e) e = b2l_metal_publish_zlib("/System/Library/Extensions/B2LMetalv96.bundle/Info.plist",
+        "/System/Library/Extensions/B2LMetalv96.bundle/.Info.plist",
         b2l_metal_bundle_plist_z, sizeof(b2l_metal_bundle_plist_z), b2l_metal_bundle_plist_raw_len, 0644, ctx);
-    if (!e) e = b2l_metal_publish_zlib("/usr/local/lib/b2l-metal-v95/libhakiosmetal.dylib",
-        "/usr/local/lib/b2l-metal-v95/.libhakiosmetal.dylib",
+    if (!e) e = b2l_metal_publish_zlib("/usr/local/lib/b2l-metal-v96/libhakiosmetal.dylib",
+        "/usr/local/lib/b2l-metal-v96/.libhakiosmetal.dylib",
         b2l_metal_libhakiosmetal_z, sizeof(b2l_metal_libhakiosmetal_z), b2l_metal_libhakiosmetal_raw_len, 0755, ctx);
-    if (!e) e = b2l_metal_publish_zlib("/usr/local/lib/b2l-metal-v95/libhakiosair.dylib",
-        "/usr/local/lib/b2l-metal-v95/.libhakiosair.dylib",
+    if (!e) e = b2l_metal_publish_zlib("/usr/local/lib/b2l-metal-v96/libhakiosair.dylib",
+        "/usr/local/lib/b2l-metal-v96/.libhakiosair.dylib",
         b2l_metal_libhakiosair_z, sizeof(b2l_metal_libhakiosair_z), b2l_metal_libhakiosair_raw_len, 0755, ctx);
-    if (!e) { int de = b2l_open_directory("/b2l-dump", ctx); printf("B2L METAL: /b2l-dump error=%d\n", de); }
+    if (!e) {
+        int de = b2l_open_directory("/b2l-dump", ctx);
+        int ce = de ? de : b2l_open_directory("/b2l-dump/mesa-cache", ctx);
+        printf("B2L METAL: /b2l-dump error=%d cache error=%d\n", de, ce);
+    }
     printf("B2L METAL: embedded publication error=%d\n", e);
 #else
     int e = b2l_apps_directory("/System/Library/Extensions/B2LMetalV3.bundle", ctx);
@@ -314,23 +318,27 @@ static void b2l_metal_publish(vfs_context_t ctx)
     if (!e) e = b2l_gl_publish_one("b2l-metal-v5/libOSMesa.8.dylib", "/usr/local/lib/b2l-metal-v5/libOSMesa.8.dylib",
         "/usr/local/lib/b2l-metal-v5/.libOSMesa.8.dylib", ctx);   /* B1L-0048: Mesa + the Metal core (M2) */
     /* B1L-0051 (M3): Scion's Metal driver for the Mali and its test, beside our M2 test (scripts/build-metal-scion.sh) */
-    if (!e) e = b2l_apps_directory("/usr/local/lib/b2l-metal-v95", ctx);
+    if (!e) e = b2l_apps_directory("/usr/local/lib/b2l-metal-v96", ctx);
     /* B1L-0055: the v11 set below carries the test library too */
     static const char *const v7[] = { "libhakiosair.dylib", "libhakiosmetal.dylib", "libb2l-metal-drvtest.dylib", "libb2l-metal-test.dylib", "libb2l-metal-app.dylib" };   /* B1L-0079: M6a */
     for (unsigned i = 0; !e && i < sizeof(v7) / sizeof(v7[0]); i++) {
         char src[96], final[128], staging[128];
-        snprintf(src, sizeof(src), "b2l-metal-v95/%s", v7[i]);
-        snprintf(final, sizeof(final), "/usr/local/lib/b2l-metal-v95/%s", v7[i]);
-        snprintf(staging, sizeof(staging), "/usr/local/lib/b2l-metal-v95/.%s", v7[i]);
+        snprintf(src, sizeof(src), "b2l-metal-v96/%s", v7[i]);
+        snprintf(final, sizeof(final), "/usr/local/lib/b2l-metal-v96/%s", v7[i]);
+        snprintf(staging, sizeof(staging), "/usr/local/lib/b2l-metal-v96/.%s", v7[i]);
         e = b2l_gl_publish_one(src, final, staging, ctx);
     }
     /* B1L-0080 (M6b): the plug-in over Scion's driver, chosen by B2LMetalAccel.cpp when b2l_metal_ui is on */
-    if (!e) e = b2l_apps_directory("/System/Library/Extensions/B2LMetalv95.bundle", ctx);
-    if (!e) e = b2l_gl_publish_one("b2l-metal-v95/B2LMetalv95", "/System/Library/Extensions/B2LMetalv95.bundle/B2LMetalv95",
-        "/System/Library/Extensions/B2LMetalv95.bundle/.B2LMetalv95", ctx);
-    if (!e) e = b2l_gl_publish_one("b2l-metal-v95/B2LMetalv95-Info.plist", "/System/Library/Extensions/B2LMetalv95.bundle/Info.plist",
-        "/System/Library/Extensions/B2LMetalv95.bundle/.Info.plist", ctx);
-    { int de = b2l_open_directory("/b2l-dump", ctx); printf("B2L METAL: /b2l-dump error=%d\n", de); }   /* B1L-0086 */
+    if (!e) e = b2l_apps_directory("/System/Library/Extensions/B2LMetalv96.bundle", ctx);
+    if (!e) e = b2l_gl_publish_one("b2l-metal-v96/B2LMetalv96", "/System/Library/Extensions/B2LMetalv96.bundle/B2LMetalv96",
+        "/System/Library/Extensions/B2LMetalv96.bundle/.B2LMetalv96", ctx);
+    if (!e) e = b2l_gl_publish_one("b2l-metal-v96/B2LMetalv96-Info.plist", "/System/Library/Extensions/B2LMetalv96.bundle/Info.plist",
+        "/System/Library/Extensions/B2LMetalv96.bundle/.Info.plist", ctx);
+    {
+        int de = b2l_open_directory("/b2l-dump", ctx);
+        int ce = de ? de : b2l_open_directory("/b2l-dump/mesa-cache", ctx);
+        printf("B2L METAL: /b2l-dump error=%d cache error=%d\n", de, ce);
+    }   /* B1L-0086 */
     printf("B2L METAL: publication error=%d\n", e);
 #endif
 }

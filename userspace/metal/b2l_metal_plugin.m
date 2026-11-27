@@ -36,24 +36,25 @@ psay(const char *format, ...)
 @implementation B2LMetalUIDevice
 - (instancetype)initWithAcceleratorPort:(io_service_t)port
 {
-	/* B2L (B1L-0269): expose Mali GPU to backboardd for QuartzCore compositing and Liquid Glass by default.
-	 * SpringBoard/chronod/iconservicesagent hit unimplemented RenderBox buffer-textures and shader phis,
-	 * breaking icons (Calendar, Settings Battery) and stalling the single core. Boot-args b2l_gpu_icons=1
-	 * or b2l_gpu_all=1 reopen GPU access for testing without rebuilding. */
+	/* B2L (B1L-0269 + Step 3): expose Mali GPU to backboardd, SpringBoard, chronod, and
+	 * iconservicesagent so Clock, Calendar, widgets, Control Center glyphs, and QuartzCore
+	 * Glass render on the Mali GPU (boot-arg b2l_gpu_icons=0 restricts to backboardd alone;
+	 * b2l_gpu_all=1 exposes to all processes). */
 	static const char *const icon_daemons[] = { "SpringBoard", "chronod", "iconservicesagent" };
 	const char *me = getprogname();
-	bool ok = me != NULL && strcmp(me, "backboardd") == 0;
-	if (!ok && me != NULL) {
+	bool is_icon_daemon = false;
+	for (unsigned i = 0; me != NULL && i < sizeof(icon_daemons) / sizeof(icon_daemons[0]); i++)
+		is_icon_daemon |= strcmp(me, icon_daemons[i]) == 0;
+	bool ok = me != NULL && (strcmp(me, "backboardd") == 0 || is_icon_daemon);
+	if (me != NULL) {
 		char bootargs[512] = "";
 		size_t blen = sizeof(bootargs) - 1;
 		if (sysctlbyname("kern.bootargs", bootargs, &blen, NULL, 0) == 0) {
 			bootargs[blen] = '\0';
 			if (strstr(bootargs, "b2l_gpu_all=1") != NULL) {
 				ok = true;
-			} else if (strstr(bootargs, "b2l_gpu_icons=1") != NULL) {
-				for (unsigned i = 0; i < sizeof(icon_daemons) / sizeof(icon_daemons[0]); i++) {
-					ok |= strcmp(me, icon_daemons[i]) == 0;
-				}
+			} else if (strstr(bootargs, "b2l_gpu_icons=0") != NULL && is_icon_daemon) {
+				ok = false;
 			}
 		}
 	}

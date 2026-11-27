@@ -12,6 +12,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
+import shutil
 import struct
 import subprocess
 import sys
@@ -374,8 +375,7 @@ def export(reader, output, include_prefixes=()):
         selected = list(volume.selected(include_prefixes))
         require(bool(selected), 'no unified-log files found')
         required_bytes = sum(u64(e['fork_raw']) for e, _, _, _ in selected)
-        disk = os.statvfs(output)
-        require(required_bytes + 16 * 1024 * 1024 <= disk.f_bavail * disk.f_frsize, 'insufficient host disk space')
+        require(required_bytes + 16 * 1024 * 1024 <= shutil.disk_usage(output).free, 'insufficient host disk space')
         for directory in ('Persist', 'Special', 'Signpost', 'HighVolume', 'timesync', 'uuidtext'):
             (output / directory).mkdir(exist_ok=True)
         for e, full, relative, essential in selected:

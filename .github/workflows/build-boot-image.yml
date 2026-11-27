@@ -49,7 +49,7 @@ jobs:
           python -m unittest tests.test_b2l_board tests.test_make_board_platform tests.test_memory_profile tests.test_package_boot tests.test_ram_bounds tests.test_extract_firmware tests.test_prepare_boot_firmware tests.test_generate_metal_payload tests.test_battery_fg
 
   build-metal:
-    name: Build S10e B2LMetalv95 Driver
+    name: Build S10e B2LMetalv96 Driver
     needs: test
     runs-on: macos-15
     steps:
@@ -61,21 +61,21 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Cache B2LMetalv95 Build
+      - name: Cache B2LMetalv96 Build
         id: metal-cache
         uses: actions/cache@v4
         with:
-          path: out/b2l-metal-v95
-          key: b2l-metal-v95-${{ runner.os }}-${{ hashFiles('userspace/metal/**', 'userspace/mesa/**', 'scripts/build-mesa.sh', 'scripts/build-metal-scion.sh', 'scripts/unsign-branches.py') }}
+          path: out/b2l-metal-v96
+          key: b2l-metal-v96-${{ runner.os }}-${{ hashFiles('userspace/metal/**', 'userspace/mesa/**', 'scripts/build-mesa.sh', 'scripts/build-metal-scion.sh', 'scripts/unsign-branches.py') }}
 
-      - name: Build B2LMetalv95 on Cache Miss
+      - name: Build B2LMetalv96 on Cache Miss
         if: steps.metal-cache.outputs.cache-hit != 'true'
         env:
           HAKIOS: /tmp/scion
           MESA_BUILD: /tmp/build-mesa
-          V: b2l-metal-v95
+          V: b2l-metal-v96
           MESA_LIB: /tmp/build-mesa/build-softpipe-panfrost/src/gallium/targets/hakiosair/libhakiosair.dylib
-          METAL_OUT: ${{ github.workspace }}/out/b2l-metal-v95
+          METAL_OUT: ${{ github.workspace }}/out/b2l-metal-v96
         run: |
           brew install bison
           echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
@@ -86,11 +86,11 @@ jobs:
           bash scripts/build-mesa.sh
           bash scripts/build-metal-scion.sh
 
-      - name: Upload B2LMetalv95 Payload Artifact
+      - name: Upload B2LMetalv96 Payload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: s10e-b2l-metal-v95
-          path: out/b2l-metal-v95/*
+          name: s10e-b2l-metal-v96
+          path: out/b2l-metal-v96/*
 
   build-xnu:
     name: Build S10e XNU Mach-O Kernel
@@ -130,16 +130,16 @@ jobs:
         run: |
           bash scripts/fetch-xnu.sh xnu
 
-      - name: Download B2LMetalv95 Driver Artifact
+      - name: Download B2LMetalv96 Driver Artifact
         uses: actions/download-artifact@v4
         with:
-          name: s10e-b2l-metal-v95
-          path: out/b2l-metal-v95
+          name: s10e-b2l-metal-v96
+          path: out/b2l-metal-v96
 
       - name: Prepare XNU with S10e Board Patches & Overlay
         run: |
           bash scripts/prepare-xnu.sh xnu
-          python3 scripts/generate-metal-payload.py --input out/b2l-metal-v95 --output xnu/bsd/kern/b2l_metal_payload.h
+          python3 scripts/generate-metal-payload.py --input out/b2l-metal-v96 --output xnu/bsd/kern/b2l_metal_payload.h
           python3 scripts/build-springboard-dylib.py --output xnu/bsd/kern/b2l_springboard_payload.h
           python3 scripts/build-bluetool-dylib.py --output xnu/bsd/kern/b2l_bluetool_payload.h
           echo "#define B2L_BUILD_EPOCH $(date +%s)" > xnu/iokit/Kernel/arm/b2l_build_epoch.h

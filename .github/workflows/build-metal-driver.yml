@@ -1,4 +1,4 @@
-name: Build iOS Metal GPU Driver (B2LMetalv95 + Mesa Panfrost)
+name: Build iOS Metal GPU Driver (B2LMetalv96 + Mesa Panfrost)
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ on:
 
 jobs:
   build-metal:
-    name: Build B2LMetalv95 (arm64e iOS) on macOS
+    name: Build B2LMetalv96 (arm64e iOS) on macOS
     runs-on: macos-15
     timeout-minutes: 45
 
@@ -53,25 +53,25 @@ jobs:
           bash scripts/build-mesa.sh
           ls -lh /tmp/build-mesa/build-softpipe-panfrost/src/gallium/targets/hakiosair/libhakiosair.dylib
 
-      - name: Build B2LMetalv95 Bundle & Dylibs
+      - name: Build B2LMetalv96 Bundle & Dylibs
         env:
-          V: b2l-metal-v95
+          V: b2l-metal-v96
           MESA_BUILD: /tmp/build-mesa
-          METAL_OUT: ${{ github.workspace }}/out/b2l-metal-v95
+          METAL_OUT: ${{ github.workspace }}/out/b2l-metal-v96
         run: |
           bash scripts/build-metal-scion.sh
-          ls -lh out/b2l-metal-v95/
+          ls -lh out/b2l-metal-v96/
           python3 -c "
           import zlib, pathlib
-          for p in sorted(pathlib.Path('out/b2l-metal-v95').iterdir()):
+          for p in sorted(pathlib.Path('out/b2l-metal-v96').iterdir()):
               data = p.read_bytes()
               comp = zlib.compress(data, 9)
               print(f'{p.name}: raw={len(data)} zlib={len(comp)}')
           "
 
-      - name: Upload B2LMetalv95 Driver Artifact
+      - name: Upload B2LMetalv96 Driver Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: b2l-metal-v95
-          path: out/b2l-metal-v95/*
+          name: b2l-metal-v96
+          path: out/b2l-metal-v96/*
           retention-days: 30

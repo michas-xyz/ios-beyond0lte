@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate xnu/bsd/kern/b2l_metal_payload.h from built b2l-metal-v95 outputs."""
+"""Generate xnu/bsd/kern/b2l_metal_payload.h from built b2l-metal-v96 outputs."""
 import argparse
 from pathlib import Path
 import struct
@@ -9,8 +9,8 @@ MH_MAGIC_64 = 0xfeedfacf
 CPU_TYPE_ARM64 = 0x0100000c
 
 FILES = (
-    ("B2LMetalv95", "b2l_metal_bundle_bin", True),
-    ("B2LMetalv95-Info.plist", "b2l_metal_bundle_plist", False),
+    ("B2LMetalv96", "b2l_metal_bundle_bin", True),
+    ("B2LMetalv96-Info.plist", "b2l_metal_bundle_plist", False),
     ("libhakiosmetal.dylib", "b2l_metal_libhakiosmetal", True),
     ("libhakiosair.dylib", "b2l_metal_libhakiosair", True),
 )
@@ -64,7 +64,7 @@ def generate(input_dir: Path, output_path: Path) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--input", type=Path, required=True, help="Directory with b2l-metal-v95 build artifacts")
+    p.add_argument("--input", type=Path, required=True, help="Directory with b2l-metal-v96 build artifacts")
     p.add_argument("--output", type=Path, required=True, help="Destination b2l_metal_payload.h path")
     args = p.parse_args()
     generate(args.input, args.output)
