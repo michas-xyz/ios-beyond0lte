@@ -3245,8 +3245,8 @@ rep234("""   const char *read_error = NULL;
       ralloc_free(ctx);
       return NULL;
    }""", """   const char *read_error = NULL;
-   c.m = air_module_read(ctx, bitcode, size, &read_error);
-   if (!c.m) {
+   struct air_module *mm = air_module_read(ctx, bitcode, size, &read_error);
+   if (!mm) {
       if (error)
          *error = ralloc_asprintf(mem_ctx, "reader: %s", read_error);
       ralloc_free(ctx);
@@ -3267,11 +3267,11 @@ rep234("""   const char *read_error = NULL;
             return NULL;
          }
          if (lm->num_globals) {
-            unsigned base_g = c.m->num_globals;
-            c.m->globals = reralloc(ctx, c.m->globals, struct air_global *, base_g + lm->num_globals);
+            unsigned base_g = mm->num_globals;
+            mm->globals = reralloc(ctx, mm->globals, struct air_global *, base_g + lm->num_globals);
             for (unsigned gi = 0; gi < lm->num_globals; gi++)
-               c.m->globals[base_g + gi] = lm->globals[gi];
-            c.m->num_globals = base_g + lm->num_globals;
+               mm->globals[base_g + gi] = lm->globals[gi];
+            mm->num_globals = base_g + lm->num_globals;
          }
          if (lm->num_functions) {
             unsigned added = 0;
@@ -3279,16 +3279,17 @@ rep234("""   const char *read_error = NULL;
                if (!lm->functions[fi]->is_declaration && lm->functions[fi]->num_blocks)
                   added++;
             if (added) {
-               unsigned base_f = c.m->num_functions;
-               c.m->functions = reralloc(ctx, c.m->functions, struct air_function *, base_f + added);
+               unsigned base_f = mm->num_functions;
+               mm->functions = reralloc(ctx, mm->functions, struct air_function *, base_f + added);
                for (unsigned fi = 0; fi < lm->num_functions; fi++)
                   if (!lm->functions[fi]->is_declaration && lm->functions[fi]->num_blocks)
-                     c.m->functions[base_f++] = lm->functions[fi];
-               c.m->num_functions = base_f;
+                     mm->functions[base_f++] = lm->functions[fi];
+               mm->num_functions = base_f;
             }
          }
       }
-   }""", 'merge linked modules')
+   }
+   c.m = mm;""", 'merge linked modules')
 
 rep234("""   c.fns = _mesa_pointer_hash_table_create(ctx);""", """   c.fns = _mesa_pointer_hash_table_create(ctx);
    c.ptr_slots = _mesa_pointer_hash_table_create(ctx);""", 'c.ptr_slots init')
