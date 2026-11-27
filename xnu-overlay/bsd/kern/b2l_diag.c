@@ -32,6 +32,9 @@ void b2l_diag_record(const char *fmt,...)
     }else if(!strncmp(text,"B2L BLUETOOTH",13)){
         static unsigned bt_print_count;
         if(__atomic_fetch_add(&bt_print_count,1,__ATOMIC_RELAXED)<96)printf("%s",text);
+    }else if(!strncmp(text,"B2L BATTERY",11)){
+        static unsigned bat_print_count;
+        if(__atomic_fetch_add(&bat_print_count,1,__ATOMIC_RELAXED)<32)printf("%s",text);
     }else if(!strncmp(text,"B2L ZC",6)){
         static unsigned zc_print_count;
         if(__atomic_fetch_add(&zc_print_count,1,__ATOMIC_RELAXED)<32)printf("%s",text);

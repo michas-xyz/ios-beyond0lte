@@ -131,10 +131,34 @@ static void __attribute__((noreturn)) tool_main(void)
 	dispatch_main();
 }
 
+static int (*orig_getopt)(int argc, char *const argv[], const char *optstring);
+
 static int b2l_getopt(int argc, char *const argv[], const char *optstring)
 {
-	if (optstring && !strcmp(optstring, "c:hf:F:R")) tool_main();
-	return getopt(argc, argv, optstring);
+	if (optstring && !strcmp(optstring, "c:hf:F:R")) {
+		os_log_error(OS_LOG_DEFAULT, "b2l-bluetool: entering stand-in tool_main()");
+		tool_main();
+	}
+	return orig_getopt ? orig_getopt(argc, argv, optstring) : getopt(argc, argv, optstring);
+}
+
+static uintptr_t find_image_by_uuid(const uint8_t want[16])
+{
+	for (uint32_t img = 0, cnt = _dyld_image_count(); img < cnt; img++) {
+		const struct mach_header_64 *mh = (const struct mach_header_64 *)_dyld_get_image_header(img);
+		if (!mh || mh->magic != MH_MAGIC_64 || mh->filetype != MH_EXECUTE) continue;
+		const uint8_t *p = (const uint8_t *)(mh + 1);
+		for (uint32_t i = 0; i < mh->ncmds; i++) {
+			const struct load_command *lc = (const struct load_command *)p;
+			if (lc->cmd == LC_UUID && lc->cmdsize >= sizeof(struct uuid_command)) {
+				const struct uuid_command *uc = (const struct uuid_command *)lc;
+				if (!memcmp(uc->uuid, want, 16)) return (uintptr_t)mh;
+				break;
+			}
+			p += lc->cmdsize;
+		}
+	}
+	return 0;
 }
 
 /* Check all loaded images for bluetoothd 23G90 (DA7ADF00-04FA-3EE0-8782-E336E0982712). */
@@ -148,24 +172,18 @@ static uintptr_t bluetoothd_base_if_matched(void)
 		0xda, 0x7a, 0xdf, 0x00, 0x04, 0xfa, 0x3e, 0xe0,
 		0x87, 0x82, 0xe3, 0x36, 0xe0, 0x98, 0x27, 0x12
 	};
-	for (uint32_t img = 0, cnt = _dyld_image_count(); img < cnt; img++) {
-		const struct mach_header_64 *mh = (const struct mach_header_64 *)_dyld_get_image_header(img);
-		if (!mh || mh->magic != MH_MAGIC_64 || mh->filetype != MH_EXECUTE) continue;
-		const uint8_t *p = (const uint8_t *)(mh + 1);
-		for (uint32_t i = 0; i < mh->ncmds; i++) {
-			const struct load_command *lc = (const struct load_command *)p;
-			if (lc->cmd == LC_UUID && lc->cmdsize >= sizeof(struct uuid_command)) {
-				const struct uuid_command *uc = (const struct uuid_command *)lc;
-				if (!memcmp(uc->uuid, want, 16)) {
-					base = (uintptr_t)mh;
-					return base;
-				}
-				break;
-			}
-			p += lc->cmdsize;
-		}
-	}
-	return 0;
+	base = find_image_by_uuid(want);
+	return base;
+}
+
+/* Check all loaded images for BlueTool 23G90 (F088DA52-8344-3744-A134-295EE622DBFB). */
+static uintptr_t bluetool_base_if_matched(void)
+{
+	static const uint8_t want[16] = {
+		0xf0, 0x88, 0xda, 0x52, 0x83, 0x44, 0x37, 0x44,
+		0xa1, 0x34, 0x29, 0x5e, 0xe6, 0x22, 0xdb, 0xfb
+	};
+	return find_image_by_uuid(want);
 }
 
 static bool (*orig_MGIsDeviceOneOfType)(const int *types);
@@ -192,11 +210,31 @@ static bool b2l_MGIsDeviceOneOfType(const int *types)
 __attribute__((constructor))
 static void b2l_bluetool_ctor(void)
 {
+	uintptr_t page_sz = (uintptr_t)getpagesize();
+	uintptr_t bt_mh = bluetool_base_if_matched();
+	if (bt_mh) {
+		/* Patch BlueTool __DATA_CONST.__auth_got slot (+0x4e42c0) for _getopt. */
+		uintptr_t slot = bt_mh + 0x4e42c0;
+		uintptr_t page = slot & ~(page_sz - 1);
+		kern_return_t kr = vm_protect(mach_task_self(), (vm_address_t)page, (vm_size_t)page_sz, FALSE,
+		    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+		if (kr == KERN_SUCCESS) {
+			void **p = (void **)slot;
+			if (*p != (void *)b2l_getopt) {
+				orig_getopt = (int (*)(int, char *const *, const char *))(*p);
+				*p = (void *)b2l_getopt;
+			}
+			vm_protect(mach_task_self(), (vm_address_t)page, (vm_size_t)page_sz, FALSE, VM_PROT_READ);
+			os_log_error(OS_LOG_DEFAULT, "b2l-bluetool: hooked BlueTool _getopt GOT slot +0x4e42c0 (mh=0x%lx)", (unsigned long)bt_mh);
+		} else {
+			os_log_error(OS_LOG_DEFAULT, "b2l-bluetool: BlueTool vm_protect failed kr=%d", kr);
+		}
+		return;
+	}
 	uintptr_t mh = bluetoothd_base_if_matched();
 	if (!mh) return;
 	/* Patch __DATA_CONST.__auth_got slot (+0xac8c38) directly so arm64e bluetoothd always calls us. */
 	uintptr_t slot = mh + 0xac8c38;
-	uintptr_t page_sz = (uintptr_t)getpagesize();
 	uintptr_t page = slot & ~(page_sz - 1);
 	kern_return_t kr = vm_protect(mach_task_self(), (vm_address_t)page, (vm_size_t)page_sz, FALSE,
 	    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
