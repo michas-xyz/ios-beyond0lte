@@ -23,6 +23,8 @@
   Arena.c
   BootMenu.c
   BootMenu.h
+  BootMenuAdb.c
+  BootMenuAdb.h
   BootMenuEfi.c
   BootMenuEfi.h
   BootMenuDraw.c

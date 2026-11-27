@@ -19,7 +19,7 @@ int main(int argc, char **argv)
     for (size_t i = 0; i < (size_t)STRIDE * H; i++) accent += px[i] == 0x0a84ff;
     assert(accent > 100000);                    /* selected card drawn */
     for (unsigned sel = 0; sel < B2L_MENU_COUNT; sel++) {   /* every state, and a tiny screen, stays in bounds */
-        struct b2l_menu_view o = { sel, 0, 5, sel == 3 ? "Rebooting..." : NULL, NULL };
+        struct b2l_menu_view o = { sel, 0, 5, sel == B2L_MENU_REBOOT ? "Rebooting..." : NULL, NULL };
         b2l_menu_render(px, STRIDE, W, H, &o);
         b2l_menu_render(px, 100, 100, 100, &o);
     }

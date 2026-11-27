@@ -7,12 +7,12 @@
 
 #include <stdint.h>
 
-enum b2l_menu_item { B2L_MENU_BOOT, B2L_MENU_HOLD, B2L_MENU_RECOVERY, B2L_MENU_REBOOT, B2L_MENU_COUNT };
+enum b2l_menu_item { B2L_MENU_BOOT, B2L_MENU_RECOVERY, B2L_MENU_REBOOT, B2L_MENU_COUNT };
 enum b2l_menu_key { B2L_KEY_NONE, B2L_KEY_UP, B2L_KEY_DOWN, B2L_KEY_SELECT, B2L_KEY_BACK };
 enum b2l_menu_action {
     B2L_ACT_NONE,       /* nothing changed */
     B2L_ACT_REDRAW,     /* selection or countdown changed */
-    B2L_ACT_BOOT, B2L_ACT_HOLD, B2L_ACT_RECOVERY, B2L_ACT_REBOOT
+    B2L_ACT_BOOT, B2L_ACT_RECOVERY, B2L_ACT_REBOOT
 };
 /* How the menu starts. FORCE_* come from a volume key held while the loader starts. */
 enum b2l_menu_start { B2L_START_NORMAL, B2L_START_FORCE_MENU, B2L_START_FORCE_RECOVERY };

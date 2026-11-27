@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
-/* b2l-bluetool-v3.dylib:
+/* b2l-bluetool-v6.dylib:
  * 1) Stand-in for Apple's BlueTool (/usr/sbin/BlueTool) on com.apple.BlueTool XPC.
- * 2) Platform identity shim for /usr/sbin/bluetoothd 23G90 (DA7ADF00-...):
- *    answers true to MGIsDeviceOneOfType at the platform 0x16 creation site
- *    so bluetoothd does not crash on Unknown platform 0xffffffff at +0x31c.
+ * 2) Platform identity fallback for /usr/sbin/bluetoothd 23G90 (DA7ADF00-...):
+ *    when BT_CHIP is not set, answer true at +0x431bdc (chip_id 0xf, pre-Olympic
+ *    Broadcom) rather than 0x16 so bluetoothd does not issue LPCore/Olympic VSCs.
  */
 #include <dispatch/dispatch.h>
 #include <mach/mach.h>
@@ -194,12 +194,12 @@ static bool b2l_MGIsDeviceOneOfType(const int *types)
 	if (mh) {
 		uintptr_t lr = (uintptr_t)__builtin_return_address(0) & 0x00007fffffffffffULL;
 		uintptr_t ret = lr - mh;
-		/* Platform 0x16 call site in bluetoothd 23G90 (DA7ADF00-...) */
-		if (ret == 0x432160) {
+		/* Non-LPCore fallback site (chip_id = 0xf) in bluetoothd 23G90 (DA7ADF00-...) */
+		if (ret == 0x431bdc) {
 			static int logged;
 			if (!logged) {
 				logged = 1;
-				os_log_error(OS_LOG_DEFAULT, "b2l-bluetool: bluetoothd platform 0x16 matched at +0x432160");
+				os_log_error(OS_LOG_DEFAULT, "b2l-bluetool: bluetoothd platform 0xf matched at +0x431bdc");
 			}
 			return true;
 		}

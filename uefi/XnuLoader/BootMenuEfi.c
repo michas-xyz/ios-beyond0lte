@@ -18,6 +18,7 @@
 #include <Library/UefiLib.h>
 #include <Protocol/GraphicsOutput.h>
 #include "BootMenu.h"
+#include "BootMenuAdb.h"
 #include "BootMenuEfi.h"
 #include "BootMenuDraw.h"
 
@@ -43,7 +44,7 @@
 
 STATIC EFI_GUID mB2lMenuGuid = { 0x78da37fb, 0x7929, 0x467d, { 0xbc, 0xd8, 0xd3, 0x44, 0x2c, 0x84, 0x3d, 0x39 } };
 STATIC CONST CHAR16 *mItems[B2L_MENU_COUNT] = {
-    L"Boot iOS", L"Cycle Display Fix", L"Reboot to recovery (untested)", L"Reboot",
+    L"Boot iOS", L"Reboot to recovery", L"Reboot",
 };
 STATIC EFI_GRAPHICS_OUTPUT_PROTOCOL *mGop;
 STATIC UINT32 *mPixels;     /* back buffer, one GOP mode in size, kept for the loader's lifetime */
@@ -152,15 +153,26 @@ ReadKey(VOID)
     return Result;
 }
 
-/* Waits at most Ms for a key; returns at once when one arrives. */
+/* Waits at most Ms for a key or ADB action; returns at once when one arrives. */
 STATIC enum b2l_menu_key
-WaitKey(EFI_EVENT Timer, UINTN Ms)
+WaitKey(EFI_EVENT Timer, UINTN Ms, B2L_ADB_ACTION *AdbAct, BOOLEAN *AdbRedraw)
 {
+    (VOID)Timer;
     UINT64 Until = NowMs() + Ms;
     do {
+        if (AdbAct) {
+            BOOLEAN Dirty = FALSE;
+            B2L_ADB_ACTION Act = B2lAdbPoll(&Dirty);
+            if (Dirty && AdbRedraw) *AdbRedraw = TRUE;
+            if (Act != B2L_ADB_ACT_NONE) {
+                *AdbAct = Act;
+                return B2L_KEY_NONE;
+            }
+            if (Dirty) return B2L_KEY_NONE;
+        }
         enum b2l_menu_key Key = ReadKey();
         if (Key != B2L_KEY_NONE) return Key;
-        gBS->Stall(10 * 1000);  /* 10 ms polling slice */
+        gBS->Stall(1000);  /* 1 ms polling slice keeps ADB USB transfers fast */
     } while (NowMs() < Until);
     return B2L_KEY_NONE;
 }
@@ -189,19 +201,8 @@ Draw(CONST struct b2l_menu *Menu, UINT64 Now, CONST CHAR8 *Note, CONST CHAR8 *St
         UINT32 Stride = Mode->Stride ? Mode->Stride : mGop->Mode->Info->PixelsPerScanLine;
         if (Stride == 0) Stride = 1440;
 
-        CHAR8 StatusText[128];
-        if (Status) {
-            AsciiStrCpyS(StatusText, sizeof(StatusText), Status);
-        } else {
-            AsciiSPrint(StatusText, sizeof(StatusText), "%a", Mode->Name);
-        }
-
-        CHAR8 ModeNote[128];
-        if (Note) {
-            AsciiStrCpyS(ModeNote, sizeof(ModeNote), Note);
-        } else {
-            AsciiStrCpyS(ModeNote, sizeof(ModeNote), mDiagBuf);
-        }
+        CONST CHAR8 *StatusText = Status ? Status : B2lAdbStatus();
+        CONST CHAR8 *ModeNote = Note ? Note : (mModeIndex ? mDiagBuf : NULL);
 
         struct b2l_menu_view View = { Menu->selected, Left, B2L_MENU_TIMEOUT_S, StatusText, ModeNote };
         b2l_menu_render(mPixels, RenderW, RenderW, H, &View);
@@ -225,8 +226,8 @@ Draw(CONST struct b2l_menu *Menu, UINT64 Now, CONST CHAR8 *Note, CONST CHAR8 *St
     for (UINTN I = 0; I < B2L_MENU_COUNT; I++)
         Print(L" %s %s\r\n", I == Menu->selected ? L">" : L" ", mItems[I]);
     Print(L"\r\nVolume +/-: move    Power: select    Bixby: cycle stride (%a)\r\n", mModes[mModeIndex].Name);
-    if (Status) Print(L"%a\r\n", Status);
-    else if (Left) Print(L"Booting iOS in %u s\r\n", Left);
+    Print(L"%a\r\n", Status ? Status : B2lAdbStatus());
+    if (Left) Print(L"Booting iOS in %u s\r\n", Left);
     if (Note) Print(L"\r\n%a\r\n", Note);
 }
 
@@ -269,7 +270,7 @@ ProbeStart(EFI_EVENT Timer)
 {
     UINT64 Until = NowMs() + B2L_MENU_PROBE_MS;
     while (NowMs() < Until) {
-        enum b2l_menu_key Key = WaitKey(Timer, 50);
+        enum b2l_menu_key Key = WaitKey(Timer, 50, NULL, NULL);
         if (Key == B2L_KEY_UP) return B2L_START_FORCE_RECOVERY;
         if (Key == B2L_KEY_DOWN) return B2L_START_FORCE_MENU;
     }
@@ -291,10 +292,27 @@ B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown)
     enum b2l_menu_start Start = NoCountdown ? B2L_START_FORCE_MENU : ProbeStart(Timer);
     b2l_menu_init(&Menu, Remembered(), B2L_MENU_TIMEOUT_S * 1000u, Start, NowMs());
     ApplyDisplayMode(mModeIndex);
+    B2lAdbInit();
     Draw(&Menu, NowMs(), Note, NULL);
     for (;;) {
-        enum b2l_menu_key Key = WaitKey(Timer, 100);
+        B2L_ADB_ACTION AdbAct = B2L_ADB_ACT_NONE;
+        BOOLEAN AdbDirty = FALSE;
+        enum b2l_menu_key Key = WaitKey(Timer, 100, &AdbAct, &AdbDirty);
         UINT64 Now = NowMs();
+        if (AdbAct == B2L_ADB_ACT_BOOT) {
+            Choice = B2L_CHOICE_BOOT;
+            break;
+        }
+        if (AdbAct == B2L_ADB_ACT_RECOVERY || AdbAct == B2L_ADB_ACT_REBOOT) {
+            BOOLEAN Rec = (AdbAct == B2L_ADB_ACT_RECOVERY);
+            Draw(&Menu, Now, Note, Rec ? "Rebooting to recovery..." : "Rebooting...");
+            B2lAdbStop();
+            Reset(Rec);
+            B2lAdbInit();
+            b2l_menu_init(&Menu, Menu.selected, 0, B2L_START_FORCE_MENU, NowMs());
+            Draw(&Menu, NowMs(), Note, NULL);
+            continue;
+        }
         if (Key == B2L_KEY_BACK) {
             Menu.counting = 0;
             mModeIndex = (mModeIndex + 1) % MODE_COUNT;
@@ -303,20 +321,21 @@ B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown)
             continue;
         }
         enum b2l_menu_action Action = b2l_menu_event(&Menu, Key, Now);
-        if (Action == B2L_ACT_NONE) continue;
+        if (Action == B2L_ACT_NONE) {
+            if (AdbDirty) Draw(&Menu, Now, Note, NULL);
+            continue;
+        }
         if (Action == B2L_ACT_REDRAW) { Draw(&Menu, Now, Note, NULL); continue; }
         Remember((UINT8)Menu.selected);
         if (Action == B2L_ACT_BOOT) { Choice = B2L_CHOICE_BOOT; break; }
-        if (Action == B2L_ACT_HOLD) {
-            mModeIndex = (mModeIndex + 1) % MODE_COUNT;
-            ApplyDisplayMode(mModeIndex);
-            Draw(&Menu, Now, Note, NULL);
-            continue;
-        }
         Draw(&Menu, Now, Note, Action == B2L_ACT_RECOVERY ? "Rebooting to recovery..." : "Rebooting...");
+        B2lAdbStop();
         Reset(Action == B2L_ACT_RECOVERY);
+        B2lAdbInit();
         b2l_menu_init(&Menu, Menu.selected, 0, B2L_START_FORCE_MENU, NowMs());
+        Draw(&Menu, NowMs(), Note, NULL);
     }
+    B2lAdbStop();
     if (Timer) gBS->CloseEvent(Timer);
     gST->ConOut->ClearScreen(gST->ConOut);
     return Choice;
@@ -369,5 +388,5 @@ B2lBootFailed(EFI_STATUS Status)
     gBS->Stall(2500000);
     while (!EFI_ERROR(gST->ConIn->ReadKeyStroke(gST->ConIn, &FlushKey))) {}
     Print(L"Press any key to return to the menu.\r\n");
-    while (WaitKey(NULL, 1000) == B2L_KEY_NONE) {}
+    while (WaitKey(NULL, 1000, NULL, NULL) == B2L_KEY_NONE) {}
 }

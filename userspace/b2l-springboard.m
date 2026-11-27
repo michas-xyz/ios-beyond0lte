@@ -203,42 +203,65 @@ static void hook_module_caps(void)
     done = YES;
     b2l_log(@"CCSModuleMetadata requiredDeviceCapabilities: arm64e dropped");
 }
+static const CGFloat kB2LShiftX = -52.0;
 static void (*sb_layout_was)(id, SEL);
+static void (*sb_fg_layout_was)(id, SEL);
 static BOOL sb_shift_trailing(UIView *v, UIView *root, NSMutableString *dump, int depth)
 {
     BOOL shifted = NO;
+    CGAffineTransform prev = v.transform;
+    BOOL wasShifted = !CGAffineTransformIsIdentity(prev) && fabs(prev.tx - kB2LShiftX) < 0.5;
+    if (wasShifted) v.transform = CGAffineTransformIdentity;
     CGRect f = [v convertRect:v.bounds toView:root];
     if (dump && depth <= 4) {
         [dump appendFormat:@" [%d:%@(%.0f,%.0f %.0fx%.0f)]", depth, NSStringFromClass([v class]),
             f.origin.x, f.origin.y, f.size.width, f.size.height];
     }
-    if (v != root && f.origin.x >= 180.0 && CGRectGetMaxX(f) >= 310.0 && f.size.width > 0.0 && f.size.width <= 170.0) {
+    if (v != root && f.origin.x >= 180.0 && CGRectGetMaxX(f) >= 300.0 && f.size.width > 0.0 && f.size.width <= 170.0) {
         CGRect inWin = v.window ? [v convertRect:v.bounds toView:v.window] : f;
         if (inWin.origin.y < 55.0) {
-            v.transform = CGAffineTransformMakeTranslation(-46.0, 0.0);
+            v.transform = CGAffineTransformMakeTranslation(kB2LShiftX, 0.0);
             return YES;
         }
     }
     for (UIView *sub in v.subviews) {
         if (sb_shift_trailing(sub, root, dump, depth + 1)) shifted = YES;
     }
-    if (v != root && !shifted && !CGAffineTransformIsIdentity(v.transform) && fabs(v.transform.tx + 46.0) < 0.5) {
-        v.transform = CGAffineTransformIdentity;
+    if (v != root && !shifted) {
+        v.transform = wasShifted ? CGAffineTransformIdentity : prev;
     }
     return shifted;
 }
-static void sb_layout_subviews(UIView *self, SEL cmd)
+static UIView *sb_status_bar_root(UIView *v)
 {
-    if (sb_layout_was) sb_layout_was(self, cmd);
+    for (UIView *cur = v; cur; cur = cur.superview) {
+        NSString *cn = NSStringFromClass([cur class]);
+        if ([cn isEqualToString:@"STUIStatusBar"] || [cn isEqualToString:@"_UIStatusBar"]) return cur;
+    }
+    return nil;
+}
+static void sb_apply_status_bar_shift(UIView *root)
+{
+    if (!root || root.bounds.size.width <= 200.0 || root.subviews.count == 0) return;
     static int dumps;
-    NSMutableString *dump = (dumps < 3 && self.bounds.size.width > 200.0 && self.subviews.count > 0)
-        ? [NSMutableString stringWithFormat:@"statusBar layout %.0fx%.0f:", self.bounds.size.width, self.bounds.size.height]
+    NSMutableString *dump = (dumps < 5)
+        ? [NSMutableString stringWithFormat:@"statusBar layout %.0fx%.0f:", root.bounds.size.width, root.bounds.size.height]
         : nil;
-    BOOL moved = sb_shift_trailing(self, self, dump, 0);
+    BOOL moved = sb_shift_trailing(root, root, dump, 0);
     if (dump) {
         dumps++;
         b2l_log([NSString stringWithFormat:@"%@ moved=%d", dump, moved]);
     }
+}
+static void sb_layout_subviews(UIView *self, SEL cmd)
+{
+    if (sb_layout_was) sb_layout_was(self, cmd);
+    sb_apply_status_bar_shift(self);
+}
+static void sb_fg_layout_subviews(UIView *self, SEL cmd)
+{
+    if (sb_fg_layout_was) sb_fg_layout_was(self, cmd);
+    sb_apply_status_bar_shift(sb_status_bar_root(self));
 }
 static Class (*vp_was)(id, SEL, id, id);
 static Class vp_override(id self, SEL cmd, id screen, id info)
@@ -294,6 +317,15 @@ static void hook_status_bar(void)
             b2l_log([NSString stringWithFormat:@"%@ layoutSubviews: hooked", NSStringFromClass(sbCls)]);
         }
     }
+    Class fgCls = objc_getClass("STUIStatusBarForegroundView");
+    if (!fgCls) fgCls = objc_getClass("_UIStatusBarForegroundView");
+    if (fgCls) {
+        Method flm = class_getInstanceMethod(fgCls, @selector(layoutSubviews));
+        if (flm) {
+            sb_fg_layout_was = (void (*)(id, SEL))method_setImplementation(flm, (IMP)sb_fg_layout_subviews);
+            b2l_log([NSString stringWithFormat:@"%@ layoutSubviews: hooked", NSStringFromClass(fgCls)]);
+        }
+    }
     Class split = objc_getClass("STUIStatusBarVisualProvider_Split1080");
     if (!split) split = objc_getClass("_UIStatusBarVisualProvider_Split1080");
     if (split) {
@@ -341,7 +373,7 @@ static void image_added(const struct mach_header *mh, intptr_t slide)
 
 __attribute__((constructor)) static void b2l_springboard_init(void)
 {
-    b2l_log(@"b2l-springboard-v8 loaded");
+    b2l_log(@"b2l-springboard-v9 loaded");
     hook_module_caps();
     hook_status_bar();
     _dyld_register_func_for_add_image(image_added);
