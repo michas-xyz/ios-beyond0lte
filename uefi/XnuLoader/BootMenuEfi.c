@@ -225,7 +225,7 @@ Draw(CONST struct b2l_menu *Menu, UINT64 Now, CONST CHAR8 *Note, CONST CHAR8 *St
     Print(L"iOS 26 - Galaxy S10\r\n\r\n");
     for (UINTN I = 0; I < B2L_MENU_COUNT; I++)
         Print(L" %s %s\r\n", I == Menu->selected ? L">" : L" ", mItems[I]);
-    Print(L"\r\nVolume +/-: move    Power: select    Bixby: cycle stride (%a)\r\n", mModes[mModeIndex].Name);
+    Print(L"\r\nVolume +/-: move    Power: select\r\n");
     Print(L"%a\r\n", Status ? Status : B2lAdbStatus());
     if (Left) Print(L"Booting iOS in %u s\r\n", Left);
     if (Note) Print(L"\r\n%a\r\n", Note);
@@ -314,10 +314,6 @@ B2lBootMenu(CONST CHAR8 *Note, BOOLEAN NoCountdown)
             continue;
         }
         if (Key == B2L_KEY_BACK) {
-            Menu.counting = 0;
-            mModeIndex = (mModeIndex + 1) % MODE_COUNT;
-            ApplyDisplayMode(mModeIndex);
-            Draw(&Menu, Now, Note, NULL);
             continue;
         }
         enum b2l_menu_action Action = b2l_menu_event(&Menu, Key, Now);

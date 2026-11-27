@@ -151,10 +151,10 @@ void b2l_menu_render(uint32_t *pixels, uint32_t stride, uint32_t width, uint32_t
 
     if (v->note) note_lines(&c, margin, H * 70 / 100, (unsigned)cw / big.w, v->note);
 
-    static const char *const keys[3][2] = { { "Volume +/-", "move" }, { "Power", "select" }, { "Bixby", "cycle display" } };
+    static const char *const keys[2][2] = { { "Volume +/-", "move" }, { "Power", "select" } };
     int kx = margin + 64;
-    y = H - 120 - 3 * ((int)big.h + 24);
-    for (unsigned i = 0; i < 3; i++, y += (int)big.h + 24) {
+    y = H - 120 - 2 * ((int)big.h + 24);
+    for (unsigned i = 0; i < 2; i++, y += (int)big.h + 24) {
         text(&c, &big, 1, kx, y, keys[i][0], TEXT);
         text(&c, &big, 1, kx + 14 * (int)big.w, y, keys[i][1], DIM);
     }

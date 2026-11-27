@@ -8,6 +8,7 @@
 #include <Library/BaseMemoryLib.h>
 #include <Library/IoLib.h>
 #include <Library/MemoryAllocationLib.h>
+#include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include "BootMenuAdb.h"
 
@@ -80,6 +81,7 @@
 #define DWC3_GSNPSID                 0xC120
 #define DWC3_GHWPARAMS0              0xC140
 #define DWC3_GUSB2PHYCFG0            0xC200
+#define DWC3_GUSB3PIPECTL0           0xC2C0
 #define DWC3_GEVNTADRLO0             0xC400
 #define DWC3_GEVNTADRHI0             0xC404
 #define DWC3_GEVNTSIZ0               0xC408
@@ -101,12 +103,27 @@
 #define DWC3_GCTL_PRTCAP_MASK        3U
 #define DWC3_GCTL_PRTCAP_DEVICE      2U
 #define DWC3_GCTL_PRTCAP_OTG         3U
+#define DWC3_GCTL_PRTCAP_FIELD_MASK  (3U << DWC3_GCTL_PRTCAP_SHIFT)
 #define DWC3_GCTL_CORESOFTRESET      BIT11
+#define DWC3_GCTL_SCALEDOWN_MASK     (3U << 4)
+#define DWC3_GCTL_DISSCRAMBLE        BIT3
+#define DWC3_GCTL_GBLHIBERNATIONEN   BIT1
+#define DWC3_GCTL_DSBLCLKGTNG        BIT0
 #define DWC3_GSTS_CURMOD_MASK        3U
 #define DWC3_GSTS_CURMOD_DEVICE      0U
 #define DWC3_GHWPARAMS0_AWIDTH_SHIFT 24
+#define DWC3_GUSB2PHYCFG_PHYSOFTRST  BIT31
+#define DWC3_GUSB2PHYCFG_U2_FREECLK  BIT30
+#define DWC3_GUSB2PHYCFG_USBTRD_MASK (0xFU << 10)
+#define DWC3_GUSB2PHYCFG_USBTRD_16   (5U << 10)
+#define DWC3_GUSB2PHYCFG_ENBLSLPM    BIT8
 #define DWC3_GUSB2PHYCFG_SOFTRST     BIT31
 #define DWC3_GUSB2PHYCFG_SUSPHY      BIT6
+#define DWC3_GUSB2PHYCFG_ULPI_UTMI   BIT4
+#define DWC3_GUSB2PHYCFG_PHYIF_MASK  BIT3
+#define DWC3_GUSB2PHYCFG_PHYIF_16    BIT3
+#define DWC3_GUSB3PIPECTL_PHYSOFTRST BIT31
+#define DWC3_GUSB3PIPECTL_SUSPHY     BIT17
 
 #define DWC3_GEVNTSIZ_INTMASK        BIT31
 #define DWC3_GEVNTSIZ_SIZE_MASK      0xFFFFU
@@ -260,6 +277,9 @@ typedef struct {
 #pragma pack()
 
 typedef struct {
+    UINT32 Gctl;
+    UINT32 Usb2PhyCfg;
+    UINT32 Usb3PipeCtl;
     UINT32 EventAddressLow;
     UINT32 EventAddressHigh;
     UINT32 EventSize;
@@ -643,21 +663,34 @@ ArmBulkOut(VOID)
     return StartXfer(2, mAdb.DmaAddress + B2L_ADB_RX_OFFSET, B2L_ADB_RX_BYTES, DWC3_TRBCTL_NORMAL);
 }
 
+STATIC UINTN  mFailStep;
+STATIC UINT32 mFailReg;
+STATIC UINT32 mFailDsts;
+
 STATIC EFI_STATUS
 InitCtrlEps(VOID)
 {
-    EFI_STATUS St = SendEpCmd(0, DWC3_DEPCMD_DEPSTARTCFG, 0, 0, 0, NULL);
-    if (EFI_ERROR(St)) return St;
+    UINT32 CmdReg = 0;
+    EFI_STATUS St = SendEpCmd(0, DWC3_DEPCMD_DEPSTARTCFG, 0, 0, 0, &CmdReg);
+    if (EFI_ERROR(St)) { mFailStep = 1; mFailReg = CmdReg; mFailDsts = Dwc3Read(DWC3_DSTS); return St; }
     for (UINTN Ep = 0; Ep < 4; Ep++) {
-        St = SendEpCmd(Ep, DWC3_DEPCMD_SETTRANSFRESOURCE, DWC3_DEPXFERCFG_NUM_XFER_RES(1), 0, 0, NULL);
-        if (EFI_ERROR(St)) return St;
+        St = SendEpCmd(Ep, DWC3_DEPCMD_SETTRANSFRESOURCE, DWC3_DEPXFERCFG_NUM_XFER_RES(1), 0, 0, &CmdReg);
+        if (EFI_ERROR(St)) { mFailStep = 2 + Ep; mFailReg = CmdReg; mFailDsts = Dwc3Read(DWC3_DSTS); return St; }
     }
-    St = ConfigEp(0, 0, B2L_ADB_EP0_MAX_PACKET, FALSE);
-    if (EFI_ERROR(St)) return St;
-    St = ConfigEp(1, 0, B2L_ADB_EP0_MAX_PACKET, FALSE);
-    if (EFI_ERROR(St)) return St;
+    St = SendEpCmd(0, DWC3_DEPCMD_SETEPCONFIG,
+                   DWC3_DEPCFG_EP_TYPE(0) | DWC3_DEPCFG_MAX_PACKET_SIZE(B2L_ADB_EP0_MAX_PACKET) | DWC3_DEPCFG_ACTION_INIT,
+                   DWC3_DEPCFG_EP_NUMBER(0) | DWC3_DEPCFG_XFER_COMPLETE_EN | DWC3_DEPCFG_XFER_NOT_READY_EN,
+                   0, &CmdReg);
+    if (EFI_ERROR(St)) { mFailStep = 6; mFailReg = CmdReg; mFailDsts = Dwc3Read(DWC3_DSTS); return St; }
+    St = SendEpCmd(1, DWC3_DEPCMD_SETEPCONFIG,
+                   DWC3_DEPCFG_EP_TYPE(0) | DWC3_DEPCFG_MAX_PACKET_SIZE(B2L_ADB_EP0_MAX_PACKET) | DWC3_DEPCFG_FIFO_NUMBER(0) | DWC3_DEPCFG_ACTION_INIT,
+                   DWC3_DEPCFG_EP_NUMBER(1) | DWC3_DEPCFG_XFER_COMPLETE_EN | DWC3_DEPCFG_XFER_NOT_READY_EN,
+                   0, &CmdReg);
+    if (EFI_ERROR(St)) { mFailStep = 7; mFailReg = CmdReg; mFailDsts = Dwc3Read(DWC3_DSTS); return St; }
     Dwc3Write(DWC3_DALEPENA, BIT0 | BIT1);
-    return ArmEp0();
+    St = ArmEp0();
+    if (EFI_ERROR(St)) { mFailStep = 8; mFailReg = Dwc3Read(DWC3_DEPCMD(0)); mFailDsts = Dwc3Read(DWC3_DSTS); }
+    return St;
 }
 
 STATIC EFI_STATUS
@@ -1108,6 +1141,9 @@ B2lAdbInit(VOID)
     mAdb.RxBuffer      = (UINT8 *)(UINTN)(DmaAddr + B2L_ADB_RX_OFFSET);
     mAdb.TxBuffer      = (UINT8 *)(UINTN)(DmaAddr + B2L_ADB_TX_OFFSET);
 
+    mAdb.SavedDwc3.Gctl              = Dwc3Read(DWC3_GCTL);
+    mAdb.SavedDwc3.Usb2PhyCfg        = Dwc3Read(DWC3_GUSB2PHYCFG0);
+    mAdb.SavedDwc3.Usb3PipeCtl       = Dwc3Read(DWC3_GUSB3PIPECTL0);
     mAdb.SavedDwc3.EventAddressLow   = Dwc3Read(DWC3_GEVNTADRLO0);
     mAdb.SavedDwc3.EventAddressHigh  = Dwc3Read(DWC3_GEVNTADRHI0);
     mAdb.SavedDwc3.EventSize         = Dwc3Read(DWC3_GEVNTSIZ0);
@@ -1124,20 +1160,67 @@ B2lAdbInit(VOID)
         return;
     }
 
-    Dwc3Write(DWC3_DCFG, (mAdb.SavedDwc3.DeviceConfig & ~(DWC3_DCFG_DEVSPD_MASK | DWC3_DCFG_DEVADDR_MASK)) |
+    /* Reset DWC3 core in Device mode and park unused SuperSpeed PIPE PHY before endpoint commands. */
+    UINT32 Gctl = (Dwc3Read(DWC3_GCTL) & ~DWC3_GCTL_PRTCAP_FIELD_MASK) |
+                  (DWC3_GCTL_PRTCAP_DEVICE << DWC3_GCTL_PRTCAP_SHIFT);
+    Dwc3Write(DWC3_GCTL, Gctl);
+    gBS->Stall(100);
+
+    Dwc3Write(DWC3_GUSB3PIPECTL0, Dwc3Read(DWC3_GUSB3PIPECTL0) | DWC3_GUSB3PIPECTL_PHYSOFTRST);
+    Dwc3Write(DWC3_GUSB2PHYCFG0, Dwc3Read(DWC3_GUSB2PHYCFG0) | DWC3_GUSB2PHYCFG_PHYSOFTRST);
+    gBS->Stall(100);
+    Dwc3Write(DWC3_GUSB3PIPECTL0, Dwc3Read(DWC3_GUSB3PIPECTL0) & ~DWC3_GUSB3PIPECTL_PHYSOFTRST);
+    Dwc3Write(DWC3_GUSB2PHYCFG0, Dwc3Read(DWC3_GUSB2PHYCFG0) & ~DWC3_GUSB2PHYCFG_PHYSOFTRST);
+    gBS->Stall(100);
+
+    Dwc3Write(DWC3_DCTL, Dwc3Read(DWC3_DCTL) | DWC3_DCTL_CSFTRST);
+    for (UINTN Us = 0; Us < 100000; Us++) {
+        if ((Dwc3Read(DWC3_DCTL) & DWC3_DCTL_CSFTRST) == 0) break;
+        gBS->Stall(1);
+    }
+    if ((Dwc3Read(DWC3_DCTL) & DWC3_DCTL_CSFTRST) != 0) {
+        B2lAdbStop();
+        SetStatus("ADB: off (DWC3 reset timeout)");
+        return;
+    }
+    gBS->Stall(50000);
+
+    Dwc3Write(DWC3_GUSB3PIPECTL0, Dwc3Read(DWC3_GUSB3PIPECTL0) | DWC3_GUSB3PIPECTL_SUSPHY);
+    UINT32 U2Cfg = Dwc3Read(DWC3_GUSB2PHYCFG0);
+    U2Cfg &= ~(DWC3_GUSB2PHYCFG_PHYIF_MASK | DWC3_GUSB2PHYCFG_USBTRD_MASK |
+               DWC3_GUSB2PHYCFG_ULPI_UTMI | DWC3_GUSB2PHYCFG_SUSPHY |
+               DWC3_GUSB2PHYCFG_ENBLSLPM | DWC3_GUSB2PHYCFG_U2_FREECLK);
+    U2Cfg |= DWC3_GUSB2PHYCFG_PHYIF_16 | DWC3_GUSB2PHYCFG_USBTRD_16;
+    Dwc3Write(DWC3_GUSB2PHYCFG0, U2Cfg);
+
+    Gctl  = Dwc3Read(DWC3_GCTL);
+    Gctl &= ~(DWC3_GCTL_SCALEDOWN_MASK | DWC3_GCTL_DISSCRAMBLE |
+              DWC3_GCTL_GBLHIBERNATIONEN | DWC3_GCTL_DSBLCLKGTNG | DWC3_GCTL_PRTCAP_FIELD_MASK);
+    Gctl |= (DWC3_GCTL_PRTCAP_DEVICE << DWC3_GCTL_PRTCAP_SHIFT);
+    Dwc3Write(DWC3_GCTL, Gctl);
+    gBS->Stall(100);
+
+    Dwc3Write(DWC3_DCFG, (Dwc3Read(DWC3_DCFG) & ~(DWC3_DCFG_DEVSPD_MASK | DWC3_DCFG_DEVADDR_MASK)) |
                          DWC3_DCFG_DEVSPD_HS);
     Dwc3Write(DWC3_GEVNTADRLO0, (UINT32)DmaAddr);
     Dwc3Write(DWC3_GEVNTADRHI0, (UINT32)(DmaAddr >> 32));
     Dwc3Write(DWC3_GEVNTSIZ0, DWC3_GEVNTSIZ_INTMASK | (DWC3_EVENT_BUFFER_SIZE & DWC3_GEVNTSIZ_SIZE_MASK));
+    Dwc3Write(DWC3_GEVNTCOUNT0, Dwc3Read(DWC3_GEVNTCOUNT0) & DWC3_GEVNTCOUNT_MASK);
     Dwc3Write(DWC3_DEVTEN, DWC3_ADB_DEVICE_EVENTS);
+    Dwc3Write(DWC3_DALEPENA, 0);
 
+    mFailStep = 0;
+    mFailReg  = 0;
+    mFailDsts = 0;
     if (EFI_ERROR(InitCtrlEps())) {
+        CHAR8 Err[64];
+        AsciiSPrint(Err, sizeof(Err), "ADB: off (EP0 s=%u r=%08x d=%08x)", (UINT32)mFailStep, mFailReg, mFailDsts);
         B2lAdbStop();
-        SetStatus("ADB: off (EP0 failed)");
+        SetStatus(Err);
         return;
     }
 
-    UINT32 Dctl = (mAdb.SavedDwc3.DeviceControl & ~DWC3_DCTL_ULSTCHNGREQ_MASK) | DWC3_DCTL_ULSTCHNG_RX_DETECT;
+    UINT32 Dctl = (Dwc3Read(DWC3_DCTL) & ~DWC3_DCTL_ULSTCHNGREQ_MASK) | DWC3_DCTL_ULSTCHNG_RX_DETECT;
     Dwc3Write(DWC3_DCTL, Dctl);
     Dwc3Write(DWC3_DCTL, Dctl | DWC3_DCTL_RUN_STOP);
     mAdb.ControllerRunning = TRUE;
@@ -1217,6 +1300,9 @@ B2lAdbStop(VOID)
         Dwc3Write(DWC3_DEVTEN, mAdb.SavedDwc3.DeviceEventEnable);
         Dwc3Write(DWC3_DCFG, mAdb.SavedDwc3.DeviceConfig);
         Dwc3Write(DWC3_DCTL, mAdb.SavedDwc3.DeviceControl);
+        Dwc3Write(DWC3_GUSB2PHYCFG0, mAdb.SavedDwc3.Usb2PhyCfg);
+        Dwc3Write(DWC3_GUSB3PIPECTL0, mAdb.SavedDwc3.Usb3PipeCtl);
+        Dwc3Write(DWC3_GCTL, mAdb.SavedDwc3.Gctl);
         if (mAdb.PhySavedValid) RestoreHsPhy(&mAdb.SavedPhy);
         if (mAdb.DmaAddress) {
             CleanInvalidateDcache(mAdb.Dma, B2L_ADB_DMA_BYTES);

@@ -4,7 +4,7 @@
 
 #define B2L_BT_TOOL_PATH "/usr/sbin/BlueTool"
 #define B2L_BT_DAEMON_PATH "/usr/sbin/bluetoothd"
-#define B2L_BT_LIB "/usr/local/lib/b2l-bluetool-v6.dylib"
+#define B2L_BT_LIB "/usr/local/lib/b2l-bluetool-v7.dylib"
 
 int b2l_bt_dyld_pid = -1;
 int b2l_btd_dyld_pid = -1;
@@ -42,10 +42,6 @@ b2l_exec_bluetooth(struct image_params *imgp, int pointer_size)
 		err = b2l_exec_add_env(imgp, pointer_size, "BT_BAUDRATE=",
 		    sizeof("BT_BAUDRATE=") - 1,
 		    "BT_BAUDRATE=115200");
-		if (err) return err;
-		err = b2l_exec_add_env(imgp, pointer_size, "BT_CHIP=",
-		    sizeof("BT_CHIP=") - 1,
-		    "BT_CHIP=ACI BT");
 		if (err) return err;
 	}
 
