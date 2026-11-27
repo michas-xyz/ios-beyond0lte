@@ -2674,12 +2674,13 @@ b2l_push_linked(unsigned stage, id linkedObj)
 	if (descriptor == nil || _mesa == NULL) {
 		return nil;
 	}
-	if ([descriptor respondsToSelector:@selector(type)] && [descriptor type] != 0) {
+	MTLHeapDescriptor *hd = (MTLHeapDescriptor *)descriptor;
+	if ([hd respondsToSelector:@selector(type)] && [hd type] != MTLHeapTypeAutomatic) {
 		RW_ONCE("B2L: MTLHeapType %lu (placement/sparse) is not implemented; nil\n",
-			(unsigned long)[descriptor type]);
+			(unsigned long)[hd type]);
 		return nil;
 	}
-	return [[HakiosMetalHeap alloc] initWithDevice:self descriptor:descriptor];
+	return [[HakiosMetalHeap alloc] initWithDevice:self descriptor:hd];
 }
 - (MTLSizeAndAlign)heapBufferSizeAndAlignWithLength:(NSUInteger)length options:(NSUInteger)options
 {
@@ -3103,20 +3104,21 @@ b2l_push_linked(unsigned stage, id linkedObj)
 	if (self == nil) {
 		return nil;
 	}
+	MTLHeapDescriptor *hd = (MTLHeapDescriptor *)descriptor;
 	pthread_mutex_init(&_heapLock, NULL);
 	_owner = device;
-	_size = [descriptor size];
-	if ([descriptor respondsToSelector:@selector(storageMode)]) {
-		_storageMode = [descriptor storageMode];
+	_size = [hd size];
+	if ([hd respondsToSelector:@selector(storageMode)]) {
+		_storageMode = [hd storageMode];
 	}
-	if ([descriptor respondsToSelector:@selector(cpuCacheMode)]) {
-		_cpuCacheMode = [descriptor cpuCacheMode];
+	if ([hd respondsToSelector:@selector(cpuCacheMode)]) {
+		_cpuCacheMode = [hd cpuCacheMode];
 	}
-	if ([descriptor respondsToSelector:@selector(hazardTrackingMode)]) {
-		_hazardTrackingMode = [descriptor hazardTrackingMode];
+	if ([hd respondsToSelector:@selector(hazardTrackingMode)]) {
+		_hazardTrackingMode = [hd hazardTrackingMode];
 	}
-	if ([descriptor respondsToSelector:@selector(type)]) {
-		_type = [descriptor type];
+	if ([hd respondsToSelector:@selector(type)]) {
+		_type = (NSUInteger)[hd type];
 	}
 	return self;
 }
